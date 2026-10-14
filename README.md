@@ -28,7 +28,7 @@
 
 ```bash
 # Clone the repository
-git clone <your-repo-url>
+git clone https://github.com/nipungalhotra/AgentSentinel.git
 cd AgentSentinel
 
 # Build using Swift Package Manager
