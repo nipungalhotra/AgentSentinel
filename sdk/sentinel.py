@@ -14,11 +14,14 @@ SENTINEL_URL = os.environ.get("SENTINEL_URL", "http://127.0.0.1:9191/ask")
 def ask_permission(
     command: str,
     title: str = None,
-    risk: str = None,
-    requested_by: str = "Python Agent",
+    subtitle: str = None,
+    risk: str = "medium",
+    requested_by: str = "Antigravity App",
     directory: str = None,
     modifies_files: str = "Unknown",
-    tool: str = "Python"
+    tool: str = "Antigravity",
+    symbol: str = "sparkles",
+    force_prompt: bool = True
 ) -> bool:
     """
     Triggers the macOS Liquid Glass permission popup anchored beneath the MacBook camera notch.
@@ -27,11 +30,14 @@ def ask_permission(
     payload = {
         "command": command,
         "title": title,
+        "subtitle": subtitle or f"{requested_by} • {tool}",
         "risk": risk,
         "requestedBy": requested_by,
         "directory": directory or os.getcwd(),
         "modifiesFiles": modifies_files,
-        "tool": tool
+        "tool": tool,
+        "symbol": symbol,
+        "forcePrompt": force_prompt
     }
 
     try:

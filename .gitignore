@@ -5,3 +5,4 @@ Packages/
 xcuserdata/
 *.app
 DerivedData/
+__pycache__/

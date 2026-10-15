@@ -11,21 +11,27 @@ const SENTINEL_PORT = process.env.SENTINEL_PORT || 9191;
 function askPermission({
   command,
   title,
-  risk,
-  requestedBy = 'Node Agent',
+  subtitle,
+  risk = 'medium',
+  requestedBy = 'Antigravity App',
   directory = process.cwd(),
   modifiesFiles = 'Unknown',
-  tool = 'Node.js'
+  tool = 'Antigravity',
+  symbol = 'sparkles',
+  forcePrompt = true
 }) {
   return new Promise((resolve) => {
     const postData = JSON.stringify({
       command,
       title,
+      subtitle: subtitle || `${requestedBy} • ${tool}`,
       risk,
       requestedBy,
       directory,
       modifiesFiles,
-      tool
+      tool,
+      symbol,
+      forcePrompt
     });
 
     const req = http.request({
