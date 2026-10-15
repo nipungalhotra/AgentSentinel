@@ -30,6 +30,9 @@ Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, Agent
 ## ✨ Key Features
 
 - **Physical Notch Hugging (`IslandPanel`)**: Anchored flush with the physical camera notch (`CGWindowLevelForKey(.mainMenuWindow) + 3`) using `constrainFrameRect` overrides so macOS never pushes the popup down into window space.
+- **Adaptive Island Geometry (`IslandScreenGeometry`)**: Intelligently switches between `.physicalNotch` on MacBooks and `.floatingIsland` on external monitors, Windows, and Linux.
+- **Biometric Touch ID Authentication (`BiometricAuthManager`)**: Tap the Touch ID sensor on your MacBook keyboard to authenticate high-risk operations instantly.
+- **Auto-Start & Launch at Login (`StartupManager`)**: Native integration with macOS `SMAppService` and user Login Items, keeping Sentinel active in the background on system boot.
 - **Dual Transport IPC (`LocalIPCServer`)**:
   - **Unix Domain Socket** (`~/Library/Application Support/AgentSentinel/sentinel.sock`): Sub-millisecond peer-verified IPC for instantaneous hook responses.
   - **Local HTTP Server** (`http://127.0.0.1:9191`): REST endpoints (`/ask`, `/hook`, `/status`) with full CORS support.
@@ -42,7 +45,7 @@ Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, Agent
   - Interactive eye-tracking follows mouse cursor around the screen.
   - Haptic feedback and native system chimes (popup chime, pop on allow, basso on deny).
 - **Hold-to-Confirm for High-Risk Actions**:
-  - Destructive commands (`rm -rf`, `sudo`, `kill -9`, `drop database`) require a 1.0-second hold with visual red progress.
+  - Destructive commands (`rm -rf`, `sudo`, `kill -9`, `drop database`) require a 1.0-second hold with visual red progress or Touch ID tap.
 - **Flexible Scope Control**:
   - **Allow Once**: One-time execution permit.
   - **Allow 10 Min**: Temporary grant active across sessions with live countdown in the dashboard.
@@ -51,6 +54,22 @@ Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, Agent
   - **Agent Integrations Hub**: 1-click installer and status monitor for all 8 agents.
   - **Live Audit Log**: Searchable trail of every command evaluated, risk level, agent origin, and timestamp.
   - **Rules & Grants Manager**: Delete, edit, or clear temporary permissions and persistent whitelist entries.
+
+---
+
+## 📦 Installation & Packaging
+
+### Method 1: Pre-Built Disk Image (.DMG)
+Download the latest `AgentSentinel-v1.2.0.dmg` and drag `AgentSentinel.app` to your `/Applications` folder:
+```bash
+./bin/package-dmg.sh
+open dist/AgentSentinel-v1.2.0.dmg
+```
+
+### Method 2: Homebrew Cask
+```bash
+brew install --cask Casks/agent-sentinel.rb
+```
 
 ---
 
