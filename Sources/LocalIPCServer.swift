@@ -125,11 +125,14 @@ final class LocalIPCServer {
 
                 struct AskPayload: Codable {
                     let title: String?
+                    let subtitle: String?
                     let command: String
                     let risk: String?
                     let requestedBy: String?
                     let directory: String?
                     let modifiesFiles: String?
+                    let symbol: String?
+                    let tool: String?
                 }
 
                 if let payload = try? JSONDecoder().decode(AskPayload.self, from: bodyData) {
@@ -141,12 +144,17 @@ final class LocalIPCServer {
                         }
                     }()
 
+                    let agentName = payload.requestedBy ?? "CLI"
+                    let sub = payload.subtitle ?? (payload.tool != nil ? "\(agentName) • \(payload.tool!)" : nil)
+                    let sym = payload.symbol ?? (payload.tool?.contains("File") == true ? "pencil.and.outline" : "terminal")
+
                     let req = PermissionRequest(
                         title: payload.title,
-                        subtitle: "Terminal access",
+                        subtitle: sub,
+                        symbol: sym,
                         command: payload.command,
                         risk: risk,
-                        requestedBy: payload.requestedBy ?? "CLI",
+                        requestedBy: agentName,
                         directory: payload.directory ?? "~",
                         modifiesFiles: payload.modifiesFiles ?? "Unknown"
                     )

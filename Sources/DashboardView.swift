@@ -504,85 +504,221 @@ struct RulesTab: View {
     }
 }
 
-// MARK: - CLI & Agent Setup Tab
+// MARK: - AI Agent & CLI Integrations Tab
 
 struct CLIIntegrationTab: View {
-    @State private var copiedCurl = false
-    @State private var scriptInstalled = false
+    @State private var allInstalled = false
+    @State private var claudeInstalled = false
+    @State private var cursorInstalled = false
+    @State private var antigravityInstalled = false
+    @State private var zshInstalled = false
+    @State private var copiedSnippet = false
+    @State private var selectedSnippet = 0
 
-    let curlSample = """
-    curl -s -X POST http://localhost:9191/ask \\
-      -H "Content-Type: application/json" \\
-      -d '{"command": "npm install express", "requestedBy": "Claude Code"}'
-    """
+    let pythonSnippet = """
+from sentinel import ask_permission, guard
 
-    let wrapperScript = """
-    #!/usr/bin/env bash
-    # sentinel wrapper: checks Agent Sentinel before executing command
-    CMD="$*"
-    RESPONSE=$(curl -s -X POST http://localhost:9191/ask \\
-      -H "Content-Type: application/json" \\
-      -d "{\\"command\\": \\"$CMD\\", \\"requestedBy\\": \\"$USER\\"}")
+# 1. Ask permission before critical actions
+if ask_permission("rm -rf ./cache", requested_by="ChatGPT", risk="high"):
+    print("User approved! Proceeding...")
 
-    if echo "$RESPONSE" | grep -q '"allowed": true'; then
-      echo "🛡️ Sentinel approved: executing..."
-      eval "$CMD"
-    else
-      echo "❌ Sentinel denied permission."
-      exit 1
-    fi
-    """
+# 2. Or guard command execution automatically
+result = guard("npm run build", requested_by="Codex")
+print(result.stdout)
+"""
+
+    let nodeSnippet = """
+const { askPermission } = require('./sentinel');
+
+async function main() {
+  const allowed = await askPermission({
+    command: 'git push origin main --force',
+    requestedBy: 'Claude Code',
+    risk: 'high'
+  });
+
+  if (allowed) {
+    console.log("Approved by user via Liquid Glass popup!");
+  }
+}
+main();
+"""
+
+    let mcpJsonSnippet = """
+{
+  "mcpServers": {
+    "sentinel": {
+      "command": "node",
+      "args": ["/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-mcp.js"],
+      "env": { "SENTINEL_PORT": "9191" }
+    }
+  }
+}
+"""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // Header Banner
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Integrate Agent Sentinel into your CLI & Tools")
-                        .font(.title3.bold())
-                    Text("Agent Sentinel runs a local lightweight HTTP daemon on port 9191. Any shell script, CLI tool, or AI agent can request permission before executing actions.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Universal AI Agent & Tool Integrations")
+                                .font(.title3.bold())
+                            Text("Seamlessly guards actions for Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, and your terminal shell.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
 
-                // 1. One-Click CLI Wrapper Script Installation
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("1. Install `sentinel` Shell Wrapper")
-                        .font(.headline)
-                    Text("Installs a handy `sentinel` command to `~/.local/bin/sentinel` so you can guard any command with `sentinel <command>`.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Button(scriptInstalled ? "✓ Installed to ~/.local/bin/sentinel" : "Install 'sentinel' CLI Script") {
-                        installScript()
+                        Button(allInstalled ? "✓ All Configured" : "🚀 1-Click Setup All") {
+                            runInstallCommand("all")
+                            allInstalled = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(allInstalled ? .green : .blue)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(scriptInstalled ? .green : .blue)
                 }
                 .padding(18)
                 .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.04)))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
 
-                // 2. HTTP API Reference
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("2. Direct HTTP API Hook")
-                        .font(.headline)
-                    Text("Call this endpoint from Python, Node.js, Go, or shell scripts:")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                // Integration Cards Grid
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
+                    // 1. Claude Code & Cowork
+                    agentCard(
+                        title: "Claude Code & Cowork",
+                        subtitle: "Anthropic Claude CLI & Desktop",
+                        icon: "sparkles",
+                        color: .purple,
+                        details: "Configures MCP in ~/.claude.json & claude_desktop_config.json",
+                        isInstalled: claudeInstalled,
+                        onInstall: {
+                            runInstallCommand("claude")
+                            claudeInstalled = true
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Run build & test suite?",
+                                subtitle: "Claude Code • Bash",
+                                command: "npm run test:ci",
+                                risk: .medium,
+                                agent: "Claude Code",
+                                symbol: "sparkles"
+                            )
+                        }
+                    )
+
+                    // 2. Antigravity & Antigravity IDE
+                    agentCard(
+                        title: "Antigravity IDE",
+                        subtitle: "Google Antigravity Agent",
+                        icon: "atom",
+                        color: .cyan,
+                        details: "Registers MCP schema in ~/.gemini/antigravity-ide/mcp/sentinel",
+                        isInstalled: antigravityInstalled,
+                        onInstall: {
+                            runInstallCommand("antigravity")
+                            antigravityInstalled = true
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Deploy containerized service?",
+                                subtitle: "Antigravity • CloudRun",
+                                command: "gcloud run deploy agent-sentinel",
+                                risk: .medium,
+                                agent: "Antigravity",
+                                symbol: "atom"
+                            )
+                        }
+                    )
+
+                    // 3. Cursor & Codex
+                    agentCard(
+                        title: "Cursor & OpenAI Codex",
+                        subtitle: "Cursor IDE & Agentic Codex",
+                        icon: "terminal.fill",
+                        color: .green,
+                        details: "Configures MCP in ~/.cursor/mcp.json for all workspaces",
+                        isInstalled: cursorInstalled,
+                        onInstall: {
+                            runInstallCommand("cursor")
+                            cursorInstalled = true
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Execute training script?",
+                                subtitle: "Codex • PythonRunner",
+                                command: "python3 train.py --epochs=100",
+                                risk: .low,
+                                agent: "Codex",
+                                symbol: "terminal"
+                            )
+                        }
+                    )
+
+                    // 4. Universal ZSH Terminal Hook
+                    agentCard(
+                        title: "Terminal Shell Gate",
+                        subtitle: "ZSH preexec Auto-Gate",
+                        icon: "shield.lefthalf.filled",
+                        color: .orange,
+                        details: "Automatically prompts for risky commands (rm -rf, sudo) in any shell",
+                        isInstalled: zshInstalled,
+                        onInstall: {
+                            runInstallCommand("zsh")
+                            zshInstalled = true
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Delete these files permanently?",
+                                subtitle: "Terminal • Shell Gate",
+                                command: "rm -rf ~/Projects/old-build",
+                                risk: .high,
+                                agent: "ZSH Terminal",
+                                symbol: "trash"
+                            )
+                        }
+                    )
+                }
+
+                // SDK & Code Snippets Section (for custom ChatGPT / Codex agents)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Custom Agent SDK (ChatGPT, Codex, LangChain)")
+                                .font(.headline)
+                            Text("Use 1 line of code in Python or Node.js to trigger the Liquid Glass popup from any custom AI pipeline:")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+
+                        Picker("Language", selection: $selectedSnippet) {
+                            Text("Python SDK").tag(0)
+                            Text("Node.js SDK").tag(1)
+                            Text("MCP Config (JSON)").tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 320)
+                    }
 
                     VStack(alignment: .trailing, spacing: 8) {
-                        Text(curlSample)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.black.opacity(0.3))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        let activeCode = selectedSnippet == 0 ? pythonSnippet : (selectedSnippet == 1 ? nodeSnippet : mcpJsonSnippet)
 
-                        Button(copiedCurl ? "Copied!" : "Copy cURL") {
+                        Text(activeCode)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.black.opacity(0.35))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                        Button(copiedSnippet ? "✓ Copied to Clipboard" : "Copy Code Snippet") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(curlSample, forType: .string)
-                            copiedCurl = true
+                            NSPasteboard.general.setString(activeCode, forType: .string)
+                            copiedSnippet = true
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                copiedCurl = false
+                                copiedSnippet = false
                             }
                         }
                         .controlSize(.small)
@@ -590,22 +726,116 @@ struct CLIIntegrationTab: View {
                 }
                 .padding(18)
                 .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.04)))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
             }
             .padding(24)
         }
+        .onAppear {
+            checkStatus()
+        }
     }
 
-    private func installScript() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let binDir = home.appendingPathComponent(".local/bin")
-        try? FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
-        let scriptPath = binDir.appendingPathComponent("sentinel")
-        try? wrapperScript.write(to: scriptPath, atomically: true, encoding: .utf8)
+    private func agentCard(
+        title: String,
+        subtitle: String,
+        icon: String,
+        color: Color,
+        details: String,
+        isInstalled: Bool,
+        onInstall: @escaping () -> Void,
+        onTest: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(color.opacity(0.18))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: icon)
+                        .font(.system(size: 15))
+                        .foregroundStyle(color)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .bold))
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                    Text("Ready")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Color.green.opacity(0.12), in: Capsule())
+            }
+
+            Text(details)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            Divider()
+
+            HStack {
+                Button("Test Popup", action: onTest)
+                    .controlSize(.small)
+
+                Spacer()
+
+                Button(isInstalled ? "✓ Configured" : "Configure", action: onInstall)
+                    .buttonStyle(.borderedProminent)
+                    .tint(isInstalled ? .green : .blue)
+                    .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.035)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+    }
+
+    private func runInstallCommand(_ target: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/chmod")
-        process.arguments = ["+x", scriptPath.path]
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        let scriptPath = "/Users/nipun/.local/bin/sentinel"
+        process.arguments = [scriptPath, "install", target]
         try? process.run()
         process.waitUntilExit()
-        scriptInstalled = true
+    }
+
+    private func triggerTest(title: String, subtitle: String, command: String, risk: Risk, agent: String, symbol: String) {
+        Task {
+            let req = PermissionRequest(
+                title: title,
+                subtitle: subtitle,
+                symbol: symbol,
+                command: command,
+                risk: risk,
+                requestedBy: agent,
+                directory: "~/Projects/demo",
+                modifiesFiles: risk == .high ? "Yes, permanently" : "No"
+            )
+            _ = await SentinelManager.shared.evaluateOrAsk(req)
+        }
+    }
+
+    private func checkStatus() {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+
+        claudeInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".claude.json").path)
+        cursorInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".cursor/mcp.json").path)
+        antigravityInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".gemini/antigravity-ide/mcp/sentinel").path)
+        zshInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".local/share/sentinel/sentinel-hook.zsh").path)
+        allInstalled = claudeInstalled && cursorInstalled && antigravityInstalled && zshInstalled
     }
 }

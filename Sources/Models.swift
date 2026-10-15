@@ -186,10 +186,20 @@ struct PermissionRequest: Identifiable, Codable {
             detectedRisk = .medium
         }
 
+        let smartSymbol: String = {
+            if symbol != "terminal" { return symbol }
+            if command.contains("rm") || command.contains("delete") || command.contains("drop") { return "trash" }
+            if command.contains("git") { return "arrow.triangle.branch" }
+            if command.contains("npm") || command.contains("cargo") || command.contains("pip") || command.contains("brew") { return "shippingbox" }
+            if command.contains("curl") || command.contains("wget") || command.contains("http") { return "globe" }
+            if requestedBy != "CLI" && requestedBy != "user" { return "sparkles" }
+            return "terminal"
+        }()
+
         self.id = UUID()
         self.title = title ?? (detectedRisk == .high ? "Delete files or execute dangerous command?" : "Run this command?")
-        self.subtitle = subtitle ?? "Terminal command"
-        self.symbol = symbol
+        self.subtitle = subtitle ?? "\(requestedBy) • \(detectedRisk == .high ? "File System" : "Terminal")"
+        self.symbol = smartSymbol
         self.tokens = parsedTokens.isEmpty ? [CommandToken(command, .command)] : parsedTokens
         self.risk = risk ?? detectedRisk
         self.requestedBy = requestedBy

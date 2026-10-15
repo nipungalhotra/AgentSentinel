@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+
+# Agent Sentinel Universal CLI & Agent Dispatcher
+# Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, and ZSH
+
+SENTINEL_DIR="/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel"
+MCP_SERVER="$SENTINEL_DIR/bin/sentinel-mcp.js"
+PORT=9191
+
+ensure_daemon() {
+  if ! curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
+    echo "🛡️ Starting Agent Sentinel daemon..."
+    open "$SENTINEL_DIR/AgentSentinel.app"
+    for i in {1..10}; do
+      if curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
+        break
+      fi
+      sleep 0.3
+    done
+  fi
+}
+
+cmd_status() {
+  STATUS=$(curl -s --connect-timeout 2 "http://127.0.0.1:$PORT/status" 2>&1)
+  if [ $? -eq 0 ]; then
+    echo "🛡️ Agent Sentinel Status: ONLINE"
+    echo "$STATUS"
+  else
+    echo "❌ Agent Sentinel Status: OFFLINE"
+    echo "Run 'open $SENTINEL_DIR/AgentSentinel.app' to start."
+  fi
+}
+
+cmd_mcp() {
+  ensure_daemon
+  node "$MCP_SERVER"
+}
+
+cmd_run() {
+  if [ -z "$1" ]; then
+    echo "Usage: sentinel run <command...>"
+    exit 1
+  fi
+  ensure_daemon
+  CMD="$*"
+  DIR="$(pwd)"
+  USER_NAME="${USER:-user}"
+
+  PAYLOAD=$(cat <<EOF
+{
+  "command": "$CMD",
+  "requestedBy": "$USER_NAME (Terminal)",
+  "directory": "$DIR",
+  "tool": "Bash"
+}
+EOF
+)
+
+  RESPONSE=$(curl -s -X POST "http://127.0.0.1:$PORT/ask" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD")
+
+  if echo "$RESPONSE" | grep -q '"allowed": true'; then
+    SCOPE=$(echo "$RESPONSE" | grep -o '"scope": "[^"]*"' | cut -d'"' -f4)
+    echo "🛡️ Sentinel approved ($SCOPE): executing..."
+    eval "$CMD"
+  else
+    echo "❌ Sentinel denied permission: command was not executed."
+    exit 1
+  fi
+}
+
+cmd_install_claude() {
+  echo "🟣 Configuring Claude Code & Claude Desktop (Cowork)..."
+  NODE_PATH=$(which node)
+
+  # 1. Claude Desktop (Cowork) config
+  CLAUDE_DESKTOP_DIR="$HOME/Library/Application Support/Claude"
+  CLAUDE_DESKTOP_CONFIG="$CLAUDE_DESKTOP_DIR/claude_desktop_config.json"
+  mkdir -p "$CLAUDE_DESKTOP_DIR"
+
+  python3 -c "
+import json, os
+path = os.path.expanduser('$CLAUDE_DESKTOP_CONFIG')
+try:
+    with open(path, 'r') as f: data = json.load(f)
+except Exception:
+    data = {}
+if 'mcpServers' not in data: data['mcpServers'] = {}
+data['mcpServers']['sentinel'] = {
+    'command': '$NODE_PATH',
+    'args': ['$MCP_SERVER'],
+    'env': {'SENTINEL_PORT': '9191'}
+}
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+print('✓ Updated ' + path)
+"
+
+  # 2. Claude Code global config (~/.claude.json)
+  CLAUDE_CODE_CONFIG="$HOME/.claude.json"
+  python3 -c "
+import json, os
+path = os.path.expanduser('$CLAUDE_CODE_CONFIG')
+try:
+    with open(path, 'r') as f: data = json.load(f)
+except Exception:
+    data = {}
+if 'mcpServers' not in data: data['mcpServers'] = {}
+data['mcpServers']['sentinel'] = {
+    'command': '$NODE_PATH',
+    'args': ['$MCP_SERVER'],
+    'env': {'SENTINEL_PORT': '9191'}
+}
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+print('✓ Updated ' + path)
+"
+}
+
+cmd_install_cursor() {
+  echo "🟩 Configuring Cursor & Codex..."
+  NODE_PATH=$(which node)
+  CURSOR_CONFIG="$HOME/.cursor/mcp.json"
+  mkdir -p "$HOME/.cursor"
+
+  python3 -c "
+import json, os
+path = os.path.expanduser('$CURSOR_CONFIG')
+try:
+    with open(path, 'r') as f: data = json.load(f)
+except Exception:
+    data = {}
+if 'mcpServers' not in data: data['mcpServers'] = {}
+data['mcpServers']['sentinel'] = {
+    'command': '$NODE_PATH',
+    'args': ['$MCP_SERVER'],
+    'env': {'SENTINEL_PORT': '9191'}
+}
+with open(path, 'w') as f: json.dump(data, f, indent=2)
+print('✓ Updated ' + path)
+"
+}
+
+cmd_install_antigravity() {
+  echo "🔵 Configuring Antigravity & Antigravity IDE..."
+  AGY_DIR="$HOME/.gemini/antigravity-ide/mcp/sentinel"
+  mkdir -p "$AGY_DIR"
+
+  cat << 'EOF' > "$AGY_DIR/request_permission.json"
+{
+  "name": "sentinel_request_permission",
+  "description": "Requests user authorization via macOS Liquid Glass popup anchored below MacBook camera notch. Call before running sensitive terminal commands, modifying code, or performing external operations.",
+  "parameters": {
+    "type": "OBJECT",
+    "properties": {
+      "command": { "type": "STRING", "description": "Command or action to be authorized" },
+      "title": { "type": "STRING", "description": "Human-readable question prompt" },
+      "risk": { "type": "STRING", "description": "low, medium, or high risk" },
+      "requested_by": { "type": "STRING", "description": "AI agent name (e.g. Antigravity)" },
+      "directory": { "type": "STRING", "description": "Working directory" },
+      "modifies_files": { "type": "STRING", "description": "Yes, No, or Yes, permanently" }
+    },
+    "required": ["command", "requested_by"]
+  }
+}
+EOF
+
+  cat << 'EOF' > "$AGY_DIR/instructions.md"
+# Agent Sentinel MCP Server
+Sentinel intercepts AI actions with an expressive native macOS Liquid Glass permission popup anchored beneath the MacBook notch.
+Before running sensitive commands (rm -rf, git push, deployment, install), call `sentinel_request_permission`.
+EOF
+
+  echo "✓ Registered in $AGY_DIR"
+}
+
+cmd_install_zsh() {
+  echo "⚡ Installing ZSH Shell Auto-Gate Hook..."
+  HOOK_FILE="$HOME/.local/share/sentinel/sentinel-hook.zsh"
+  mkdir -p "$HOME/.local/share/sentinel"
+
+  cat << 'EOF' > "$HOOK_FILE"
+# Agent Sentinel ZSH Pre-execution Hook
+# Intercepts dangerous commands automatically before shell runs them
+sentinel_auto_gate() {
+  local cmd="$1"
+  # Check if command is dangerous
+  if [[ "$cmd" =~ (^|[[:space:]])(rm[[:space:]]+-rf|sudo|dd[[:space:]]+|git[[:space:]]+push[[:space:]]+.*--force|mkfs|drop[[:space:]]+database) ]]; then
+    echo "🛡️ Sentinel inspecting: $cmd"
+    if ! sentinel run "$cmd"; then
+      return 1
+    fi
+  fi
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec sentinel_auto_gate
+EOF
+
+  if [ -f "$HOME/.zshrc" ]; then
+    if ! grep -q "sentinel-hook.zsh" "$HOME/.zshrc"; then
+      echo "" >> "$HOME/.zshrc"
+      echo "# Agent Sentinel Terminal Gate" >> "$HOME/.zshrc"
+      echo "[ -f \"$HOOK_FILE\" ] && source \"$HOOK_FILE\"" >> "$HOME/.zshrc"
+      echo "✓ Added Sentinel hook to ~/.zshrc"
+    else
+      echo "✓ Hook already present in ~/.zshrc"
+    fi
+  fi
+}
+
+cmd_install_all() {
+  echo "🚀 Setting up Agent Sentinel across all AI agents and environments..."
+  cmd_install_claude
+  cmd_install_cursor
+  cmd_install_antigravity
+  cmd_install_zsh
+  echo "🎉 All integrations installed successfully!"
+}
+
+# Main command router
+case "$1" in
+  mcp)
+    cmd_mcp
+    ;;
+  run)
+    shift
+    cmd_run "$@"
+    ;;
+  status)
+    cmd_status
+    ;;
+  install)
+    case "$2" in
+      claude) cmd_install_claude ;;
+      cursor) cmd_install_cursor ;;
+      antigravity) cmd_install_antigravity ;;
+      zsh) cmd_install_zsh ;;
+      all|"") cmd_install_all ;;
+      *) echo "Unknown integration: $2 (choose claude, cursor, antigravity, zsh, all)" ;;
+    esac
+    ;;
+  help|--help|-h|"")
+    echo "Agent Sentinel Universal CLI"
+    echo ""
+    echo "Usage:"
+    echo "  sentinel run <command>       Guards a command with the Liquid Glass popup"
+    echo "  sentinel mcp                 Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
+    echo "  sentinel status              Displays daemon status"
+    echo "  sentinel install <target>    Installs integration (claude, cursor, antigravity, zsh, all)"
+    echo "  sentinel install all         Configures Claude Code, Cowork, Antigravity, Cursor, and ZSH"
+    ;;
+  *)
+    # Default: guard the passed command
+    cmd_run "$@"
+    ;;
+esac
