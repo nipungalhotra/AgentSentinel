@@ -20,8 +20,9 @@ def check_daemon():
             return True
     except Exception as e:
         print(f"   ✗ Daemon offline: {e}")
-        print("   -> Starting AgentSentinel.app...")
-        os.system("open /Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app")
+        print("   -> Starting Agent Sentinel...")
+        app_path = "/Applications/AgentSentinel.app" if os.path.exists("/Applications/AgentSentinel.app") else "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app"
+        os.system(f"open '{app_path}'")
         return False
 
 def check_ide_hooks():

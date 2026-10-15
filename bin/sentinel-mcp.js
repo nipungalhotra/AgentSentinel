@@ -43,7 +43,7 @@ function requestSentinel(payload) {
       // If Sentinel is not running, attempt to launch it
       if (err.code === 'ECONNREFUSED') {
         try {
-          execSync('open /Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app');
+          execSync('open /Applications/AgentSentinel.app || open /Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app');
           // Wait 1.5s and retry once
           setTimeout(() => {
             const retryReq = http.request(options, (res2) => {

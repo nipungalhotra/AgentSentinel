@@ -53,7 +53,10 @@ def ask_permission(
     except urllib.error.URLError:
         # If Sentinel is not running, try to launch the app
         try:
-            subprocess.run(["open", "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app"], check=False)
+            if os.path.exists("/Applications/AgentSentinel.app"):
+                subprocess.run(["open", "/Applications/AgentSentinel.app"], check=False)
+            else:
+                subprocess.run(["open", "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app"], check=False)
         except Exception:
             pass
         return False
