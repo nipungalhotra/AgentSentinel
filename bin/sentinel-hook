@@ -228,16 +228,18 @@ def main():
         command = extract_command(payload)
         risk = determine_risk(command, payload.get('tool_name', ''))
 
+        t_name = payload.get('tool_name', 'Tool')
         ask_data = {
             'command': command,
-            'title': f"{agent.replace('-', ' ').title()} Request",
-            'subtitle': f"{agent.replace('-', ' ').title()} • {payload.get('tool_name', 'Tool')}",
+            'title': f"Authorize {t_name}?" if agent == 'antigravity' else f"{agent.replace('-', ' ').title()} Request",
+            'subtitle': f"Antigravity IDE • {t_name}" if agent == 'antigravity' else f"{agent.replace('-', ' ').title()} • {t_name}",
             'risk': risk,
-            'requestedBy': agent,
+            'requestedBy': 'Antigravity IDE' if agent == 'antigravity' else agent,
             'directory': payload.get('cwd', os.getcwd()),
             'modifiesFiles': payload.get('tool_input', {}).get('file_path') or 'Workspace',
-            'symbol': 'terminal.fill' if 'Bash' in payload.get('tool_name', '') else 'pencil.and.outline',
-            'tool': payload.get('tool_name', 'Command'),
+            'symbol': 'sparkles' if agent == 'antigravity' else ('terminal.fill' if 'Bash' in t_name else 'pencil.and.outline'),
+            'tool': t_name,
+            'forcePrompt': True,
             'raw': payload
         }
 
@@ -263,6 +265,19 @@ def main():
             allowed = resp.get('allowed', False)
             decision = resp.get('decision', 'deny')
             scope = resp.get('scope', 'once')
+
+            # Official Google Antigravity IDE Contract (docs/hooks.md)
+            if agent == 'antigravity':
+                if allowed:
+                    out = {'decision': 'allow'}
+                else:
+                    out = {
+                        'decision': 'deny',
+                        'reason': 'Action denied by user in loggdin'
+                    }
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
 
             if allowed:
                 if scope == 'always' and agent != 'codex':
@@ -304,9 +319,6 @@ def main():
                     }
                 sys.stdout.write(json.dumps(out) + '\n')
                 sys.stdout.flush()
-                # Non-zero or deny exit for Antigravity gating
-                if agent == 'antigravity':
-                    sys.exit(1)
                 sys.exit(0)
 
         # Fallback if server is not reachable: fail-open or re-ask
