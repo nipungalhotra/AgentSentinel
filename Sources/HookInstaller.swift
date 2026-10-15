@@ -51,7 +51,7 @@ final class HookInstaller {
 
     private func quotedHookCmd(agent: String, event: String? = nil, ask: Bool = false) -> String {
         let path = hookScriptPath.replacingOccurrences(of: "\"", with: "\\\"")
-        var cmd = "/bin/sh \"\(path)\" --agent \(agent)"
+        var cmd = "python3 \"\(path)\" --agent \(agent)"
         if ask {
             cmd += " --ask"
         }
@@ -196,7 +196,7 @@ final class HookInstaller {
     func isAntigravityInstalled() -> Bool {
         guard let data = try? Data(contentsOf: agyHooksURL),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
-        return json["sentinel"] != nil
+        return json["loggdin"] != nil || json["sentinel"] != nil || json["loggdin-safety-gate"] != nil
     }
 
     @discardableResult
@@ -205,43 +205,49 @@ final class HookInstaller {
         var root = (try? readJSON(at: agyHooksURL)) ?? [:]
         let baseCmd = quotedHookCmd(agent: "antigravity")
 
-        var sentinelConfig: [String: Any] = [:]
+        var loggdinConfig: [String: Any] = [:]
+        loggdinConfig["enabled"] = true
 
-        // PreToolUse & PostToolUse
-        for event in ["PreToolUse", "PostToolUse"] {
-            sentinelConfig[event] = [
-                [
-                    "matcher": "*",
-                    "hooks": [
-                        [
-                            "type": "command",
-                            "command": "\(baseCmd) \(event)",
-                            "timeout": event == "PreToolUse" ? 120 : 10
-                        ]
+        // PreToolUse
+        loggdinConfig["PreToolUse"] = [
+            [
+                "matcher": "*",
+                "hooks": [
+                    [
+                        "type": "command",
+                        "command": "\(baseCmd) PreToolUse",
+                        "timeout": 120
                     ]
                 ]
             ]
-        }
+        ]
 
-        // PreInvocation & Stop
-        for event in ["PreInvocation", "PostInvocation", "Stop"] {
-            sentinelConfig[event] = [
-                [
-                    "type": "command",
-                    "command": "\(baseCmd) \(event)",
-                    "timeout": 10
+        // PostToolUse
+        loggdinConfig["PostToolUse"] = [
+            [
+                "matcher": "*",
+                "hooks": [
+                    [
+                        "type": "command",
+                        "command": "\(baseCmd) PostToolUse",
+                        "timeout": 10
+                    ]
                 ]
             ]
-        }
+        ]
 
-        root["sentinel"] = sentinelConfig
+        root.removeValue(forKey: "sentinel")
+        root.removeValue(forKey: "loggdin-safety-gate")
+        root["loggdin"] = loggdinConfig
         try writeJSON(root, to: agyHooksURL)
         return true
     }
 
     func uninstallAntigravityHooks() throws {
         guard var root = try? readJSON(at: agyHooksURL) else { return }
+        root.removeValue(forKey: "loggdin")
         root.removeValue(forKey: "sentinel")
+        root.removeValue(forKey: "loggdin-safety-gate")
         try writeJSON(root, to: agyHooksURL)
     }
 

@@ -1,6 +1,8 @@
-#!/usr/bin/env python3
+#!/bin/sh
+"exec" "python3" "$0" "$@"
+# -*- coding: utf-8 -*-
 """
-sentinel-hook — Universal AI Agent Hook Relay for Agent Sentinel
+sentinel-hook — Universal AI Agent Hook Relay for loggdin (formerly Agent Sentinel)
 Compatible with Claude Code, Cowork, Antigravity, Codex, Cursor, Gemini CLI, and Shells.
 Reference: https://github.com/Louis-CFM/coucou architecture
 """
@@ -137,6 +139,8 @@ def determine_risk(command, tool_name):
 
 def send_via_socket(payload, socket_path, timeout=118):
     if not os.path.exists(socket_path):
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"SOCKET NOT FOUND: {socket_path}\n")
         return None
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -157,7 +161,9 @@ def send_via_socket(payload, socket_path, timeout=118):
         response = b''.join(chunks).decode('utf-8').strip()
         if response:
             return json.loads(response)
-    except Exception:
+    except Exception as e:
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"SOCKET EXCEPTION: {e}\n")
         return None
     return None
 
@@ -174,7 +180,9 @@ def send_via_http(payload, port=9191, timeout=120):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read()
             return json.loads(data.decode('utf-8'))
-    except Exception:
+    except Exception as e:
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"HTTP EXCEPTION: {e}\n")
         return None
 
 def main():
@@ -199,22 +207,28 @@ def main():
         else:
             i += 1
 
-    # Read stdin payload if available
-    raw = b''
     payload = {}
+    raw = b''
+    # Read stdin payload if available
     try:
         if not sys.stdin.isatty():
             raw = sys.stdin.buffer.read()
             if raw:
                 payload = json.loads(raw.decode('utf-8'))
-    except Exception:
-        pass
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"INVOKED: args={sys.argv}, raw={raw[:200]}\n")
+    except Exception as e:
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"STDIN ERROR: {e}\n")
 
     event = event_arg or payload.get('hook_event_name') or payload.get('event') or 'PermissionRequest'
     event = normalize_event(event)
     payload['hook_event_name'] = event
     payload['requestedBy'] = payload.get('requestedBy') or agent
     normalize_tool_fields(payload)
+
+    with open('/tmp/sentinel_hook.log', 'a') as f:
+        f.write(f"EVENT: {event}, keys={list(payload.keys())}, tool_name={payload.get('tool_name')}, toolCall={payload.get('toolCall')}\n")
 
     # AskUserQuestion mode
     if is_ask_mode or payload.get('tool_name') == 'AskUserQuestion':
@@ -225,10 +239,22 @@ def main():
 
     # If event is PermissionRequest or PreToolUse requiring gating:
     if event == 'PermissionRequest' or (agent == 'antigravity' and event == 'PreToolUse'):
-        command = extract_command(payload)
-        risk = determine_risk(command, payload.get('tool_name', ''))
-
         t_name = payload.get('tool_name', 'Tool')
+
+        # For Antigravity IDE: safe read-only operations do not require biometric confirmation
+        safe_read_tools = {
+            'view_file', 'list_dir', 'grep_search', 'read_url_content',
+            'read_resource', 'list_resources'
+        }
+        if agent == 'antigravity' and t_name in safe_read_tools:
+            out = {'decision': 'allow'}
+            sys.stdout.write(json.dumps(out) + '\n')
+            sys.stdout.flush()
+            sys.exit(0)
+
+        command = extract_command(payload)
+        risk = determine_risk(command, t_name)
+
         ask_data = {
             'command': command,
             'title': f"Authorize {t_name}?" if agent == 'antigravity' else f"{agent.replace('-', ' ').title()} Request",
@@ -244,9 +270,15 @@ def main():
         }
 
         # Try Unix domain socket first, fallback to HTTP 127.0.0.1:9191
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"SENDING ASK: {ask_data.get('command')}, risk={risk}\n")
         resp = send_via_socket(ask_data, socket_path)
+        with open('/tmp/sentinel_hook.log', 'a') as f:
+            f.write(f"SOCKET RESP: {resp}\n")
         if not resp:
             resp = send_via_http(ask_data, port=int(os.environ.get('SENTINEL_PORT', 9191)))
+            with open('/tmp/sentinel_hook.log', 'a') as f:
+                f.write(f"HTTP RESP: {resp}\n")
 
         # If daemon was offline, automatically launch loggdin and retry once
         if not resp:
@@ -321,7 +353,10 @@ def main():
                 sys.stdout.flush()
                 sys.exit(0)
 
-        # Fallback if server is not reachable: fail-open or re-ask
+        # Fallback if server is not reachable: fail-open for Antigravity
+        if agent == 'antigravity':
+            sys.stdout.write(json.dumps({'decision': 'allow'}) + '\n')
+            sys.stdout.flush()
         sys.exit(0)
 
     # For other events (SessionStart, PostToolUse, Stop, SessionEnd): notify Sentinel asynchronously
@@ -336,6 +371,18 @@ def main():
         send_via_socket(notify_data, socket_path, timeout=1)
     except Exception:
         pass
+
+    # Provide valid output according to agent contract
+    if agent == 'antigravity':
+        if event == 'PostToolUse':
+            sys.stdout.write('{}\n')
+        elif event == 'PreInvocation':
+            sys.stdout.write(json.dumps({'injectSteps': []}) + '\n')
+        elif event == 'Stop':
+            sys.stdout.write(json.dumps({'decision': ''}) + '\n')
+        else:
+            sys.stdout.write('{}\n')
+        sys.stdout.flush()
 
     sys.exit(0)
 
