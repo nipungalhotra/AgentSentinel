@@ -184,6 +184,24 @@ struct DashboardView: View {
                             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
+
+                        // Launch at Login Toggle
+                        HStack {
+                            Image(systemName: "bolt.badge.clock")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            Text("Launch at Login")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { StartupManager.shared.isLaunchAtLoginEnabled },
+                                set: { _ in _ = StartupManager.shared.toggleLaunchAtLogin() }
+                            ))
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                        }
+                        .padding(.top, 2)
                     }
                     .padding(12)
                     .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -430,6 +448,33 @@ struct OverviewTab: View {
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
+
+                            // Hardware & Security Capability Badges
+                            HStack(spacing: 8) {
+                                let hasNotch = (NSScreen.screens.first { $0.safeAreaInsets.top > 0 }) != nil
+                                HStack(spacing: 4) {
+                                    Image(systemName: hasNotch ? "laptopcomputer" : "display")
+                                        .font(.system(size: 9))
+                                    Text(hasNotch ? "MacBook Notch Mode" : "Universal Island Mode")
+                                        .font(.system(size: 9.5, weight: .bold))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.12), in: Capsule())
+                                .foregroundStyle(.blue)
+
+                                HStack(spacing: 4) {
+                                    Image(systemName: "touchid")
+                                        .font(.system(size: 9))
+                                    Text(BiometricAuthManager.shared.biometricName + " Ready")
+                                        .font(.system(size: 9.5, weight: .bold))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.12), in: Capsule())
+                                .foregroundStyle(.orange)
+                            }
+                            .padding(.top, 2)
                         }
 
                         Spacer()

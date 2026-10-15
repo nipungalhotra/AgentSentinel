@@ -430,6 +430,19 @@ final class PermissionModel {
         decide(.allow(.once))
     }
 
+    func authenticateWithTouchID() {
+        guard isAsking, isHigh else { return }
+        Task {
+            let success = await BiometricAuthManager.shared.authenticate(
+                reason: "Authorize high-risk action: \(request.plainCommand)"
+            )
+            if success {
+                SoundEngine.shared.playAllow()
+                decide(.allow(.once))
+            }
+        }
+    }
+
     nonisolated private static func pause(_ seconds: Double) async -> Bool {
         do {
             try await Task.sleep(for: .seconds(max(seconds, 0)))
@@ -449,10 +462,11 @@ struct CardSizeKey: PreferenceKey {
 
 struct PermissionPopupRoot: View {
     @Bindable var model: PermissionModel
+    var geometry: IslandScreenGeometry? = nil
     var onSize: (CGSize) -> Void
 
     var body: some View {
-        PermissionCard(model: model)
+        PermissionCard(model: model, geometry: geometry)
             .background(GeometryReader { Color.clear.preference(key: CardSizeKey.self, value: $0.size) })
             .onPreferenceChange(CardSizeKey.self, perform: onSize)
             .padding(PermissionPopupController.margin)
@@ -462,6 +476,7 @@ struct PermissionPopupRoot: View {
 
 struct PermissionCard: View {
     @Bindable var model: PermissionModel
+    var geometry: IslandScreenGeometry? = nil
     @State private var look: CGSize = .zero
     @State private var copiedCommand = false
     @FocusState private var focused: Bool
@@ -471,19 +486,27 @@ struct PermissionCard: View {
     var body: some View {
         let pill = PillCatalog.definition(for: model.request.requestedBy)
         VStack(spacing: 0) {
-            // Notch Bridge Anchor (Physical Notch Hugger)
-            ZStack {
+            if geometry?.mode == .physicalNotch {
+                // Notch Bridge Anchor (Physical Notch Hugger for MacBook Pro/Air)
+                ZStack {
+                    Capsule()
+                        .fill(Color.black)
+                        .frame(width: max(geometry?.notchWidth ?? 154, 154), height: 7)
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.6)
+                        .frame(width: max(geometry?.notchWidth ?? 154, 154), height: 7)
+                    Circle()
+                        .fill(Color(white: 0.2))
+                        .frame(width: 4, height: 4)
+                }
+                .offset(y: -7)
+            } else {
+                // Universal Dynamic Island Pill (External monitors, Windows, Linux)
                 Capsule()
-                    .fill(Color.black)
-                    .frame(width: 154, height: 7)
-                Capsule()
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.6)
-                    .frame(width: 154, height: 7)
-                Circle()
-                    .fill(Color(white: 0.2))
-                    .frame(width: 4, height: 4)
+                    .fill(Color.black.opacity(0.85))
+                    .frame(width: 70, height: 4)
+                    .offset(y: -6)
             }
-            .offset(y: -7)
 
             header
 
@@ -749,7 +772,28 @@ struct PermissionCard: View {
             .onHover { model.hovering(.deny, $0) }
 
             if model.isHigh {
-                HoldToConfirmButton(model: model, title: "Hold to delete")
+                HStack(spacing: 8) {
+                    HoldToConfirmButton(model: model, title: "Hold to allow")
+
+                    if BiometricAuthManager.shared.isBiometricAvailable {
+                        Button {
+                            model.authenticateWithTouchID()
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "touchid")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.orange)
+                                Text("Touch ID")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                            }
+                            .frame(height: 38)
+                            .padding(.horizontal, 10)
+                        }
+                        .glassCapsule(tint: Color.orange.opacity(0.18), interactive: true)
+                        .buttonStyle(.plain)
+                        .help("Authorize with Touch ID or Passcode")
+                    }
+                }
             } else {
                 Button {
                     model.decide(.allow(model.scope))
@@ -949,23 +993,16 @@ final class PermissionPopupController {
             ?? NSScreen.main
             ?? NSScreen.screens[0]
 
-        // Play subtle Coucou-style prompt sound
+        let geometry = IslandScreenGeometry(screen: screen)
         SoundEngine.shared.playPopup()
 
-        // Anchor top flush with the physical screen top / notch
-        let topY = screen.frame.maxY + Self.margin
-        let initial = NSRect(x: screen.frame.midX - (384 / 2 + Self.margin),
-                             y: topY - 340,
-                             width: 384 + Self.margin * 2,
-                             height: 340)
-        let panel = FloatingPanel(contentRect: initial)
+        let initialRect = geometry.frame(forContentSize: CGSize(width: 400, height: 280), margin: Self.margin, morphProgress: 0.1)
+        let panel = FloatingPanel(contentRect: initialRect)
 
-        let host = NSHostingView(rootView: PermissionPopupRoot(model: model) { [weak panel] size in
+        let host = NSHostingView(rootView: PermissionPopupRoot(model: model, geometry: geometry) { [weak panel] size in
             guard let panel, size != .zero else { return }
-            let w = size.width + Self.margin * 2
-            let h = size.height + Self.margin * 2
-            panel.setFrame(NSRect(x: screen.frame.midX - w / 2, y: topY - h, width: w, height: h),
-                           display: true)
+            let targetRect = geometry.frame(forContentSize: size, margin: Self.margin, morphProgress: 1.0)
+            panel.setFrame(targetRect, display: true, animate: true)
         })
         host.sizingOptions = []
         panel.contentView = host
