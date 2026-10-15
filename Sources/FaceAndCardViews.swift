@@ -463,28 +463,84 @@ struct PermissionPopupRoot: View {
 struct PermissionCard: View {
     @Bindable var model: PermissionModel
     @State private var look: CGSize = .zero
+    @State private var copiedCommand = false
     @FocusState private var focused: Bool
 
     private let faceCenter = CGPoint(x: 44, y: 44)
 
     var body: some View {
+        let pill = PillCatalog.definition(for: model.request.requestedBy)
         VStack(spacing: 0) {
+            // Notch Bridge Anchor (Physical Notch Hugger)
+            ZStack {
+                Capsule()
+                    .fill(Color.black)
+                    .frame(width: 154, height: 7)
+                Capsule()
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.6)
+                    .frame(width: 154, height: 7)
+                Circle()
+                    .fill(Color(white: 0.2))
+                    .frame(width: 4, height: 4)
+            }
+            .offset(y: -7)
+
             header
 
             if model.isAsking {
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     commandBox
                     if model.detailsOpen { details }
                     ScopePicker(selection: $model.scope, locked: model.isHigh)
                     actions.padding(.top, 4)
                 }
-                .padding(.top, 16)
+                .padding(.top, 14)
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
             }
         }
-        .padding(20)
-        .frame(width: 384)
-        .glassCard(cornerRadius: 32, tint: model.isHigh ? Color.red.opacity(0.10) : nil)
+        .padding(.horizontal, 22)
+        .padding(.top, 12)
+        .padding(.bottom, 20)
+        .frame(width: 400)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                // Specular rim gradient border (outer)
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.55), .white.opacity(0.18), .clear, .white.opacity(0.08)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.2
+                    )
+                // Specular rim gradient border (inner reflection sheen)
+                RoundedRectangle(cornerRadius: 31, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.24), .clear, .white.opacity(0.04)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.8
+                    )
+                    .padding(1)
+                // Dynamic ambient glow matching agent pill color
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(
+                        RadialGradient(
+                            colors: [pill.color.opacity(model.isHigh ? 0.28 : 0.16), .clear],
+                            center: .topLeading,
+                            startRadius: 20,
+                            endRadius: 320
+                        )
+                    )
+            }
+            .shadow(color: .black.opacity(0.4), radius: 32, y: 16)
+            .shadow(color: pill.color.opacity(model.isHigh ? 0.35 : 0.18), radius: 24, y: 8)
+        }
         .scaleEffect(model.appeared ? 1 : 0.88, anchor: .top)
         .offset(y: model.appeared ? 0 : -26)
         .opacity(model.appeared ? 1 : 0)
@@ -580,38 +636,78 @@ struct PermissionCard: View {
     }
 
     private var commandBox: some View {
-        HStack(spacing: 10) {
-            Image(systemName: model.request.symbol)
-                .font(.system(size: 15))
-                .foregroundStyle(.secondary)
-            Text(model.request.commandText)
-                .font(.system(size: 13, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-            Button {
-                model.detailsOpen.toggle()
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
-                    .rotationEffect(.degrees(model.detailsOpen ? 180 : 0))
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 5) {
+                Circle().fill(Color(red: 1, green: 0.36, blue: 0.34)).frame(width: 7.5, height: 7.5)
+                Circle().fill(Color(red: 1, green: 0.76, blue: 0.2)).frame(width: 7.5, height: 7.5)
+                Circle().fill(Color(red: 0.18, green: 0.82, blue: 0.38)).frame(width: 7.5, height: 7.5)
+
+                Text(model.request.requestedBy.lowercased())
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 3)
+
+                Spacer()
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(model.request.plainCommand, forType: .string)
+                    copiedCommand = true
+                    SoundEngine.shared.playTick()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                        copiedCommand = false
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: copiedCommand ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 8.5, weight: .bold))
+                        Text(copiedCommand ? "Copied" : "Copy")
+                            .font(.system(size: 9.5, weight: .medium))
+                    }
+                    .foregroundStyle(copiedCommand ? Color.green : Color.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    model.detailsOpen.toggle()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(model.detailsOpen ? "Hide" : "Details")
+                            .font(.system(size: 9.5, weight: .medium))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .rotationEffect(.degrees(model.detailsOpen ? 180 : 0))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Show details")
+
+            HStack(spacing: 8) {
+                Image(systemName: model.request.symbol)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                Text(model.request.commandText)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .frame(height: 44)
+        .padding(11)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.primary.opacity(0.07))
+                .fill(Color.black.opacity(0.35))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
         )
     }
 
@@ -744,9 +840,23 @@ struct HoldToConfirmButton: View {
     var body: some View {
         ZStack {
             GeometryReader { geo in
-                Rectangle()
-                    .fill(Color.red)
-                    .frame(width: max(0, geo.size.width * model.holdProgress))
+                let fillWidth = max(0, geo.size.width * model.holdProgress)
+                ZStack(alignment: .leading) {
+                    LinearGradient(
+                        colors: [Color.red.opacity(0.85), Color.red, Color.orange],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: fillWidth)
+
+                    if model.holdProgress > 0 && model.holdProgress < 1 {
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 4)
+                            .offset(x: max(0, fillWidth - 4))
+                            .blur(radius: 1.2)
+                    }
+                }
             }
             .clipShape(Capsule())
 
@@ -762,8 +872,12 @@ struct HoldToConfirmButton: View {
         .contentShape(Capsule())
         .onHover { model.hovering(.allow, $0) }
         .onLongPressGesture(minimumDuration: 1.0, maximumDistance: 60) {
+            SoundEngine.shared.playAllow()
             model.holdCompleted()
         } onPressingChanged: { pressing in
+            if pressing {
+                SoundEngine.shared.playTick()
+            }
             model.holdChanged(pressing: pressing)
         }
         .accessibilityLabel(title)

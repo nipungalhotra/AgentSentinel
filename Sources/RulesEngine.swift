@@ -89,6 +89,19 @@ final class RulesEngine {
         saveToDisk()
     }
 
+    func addManualRule(pattern: String, notes: String = "Manually configured") {
+        let clean = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let rule = StoredRule(
+            pattern: clean,
+            directory: "*",
+            createdAt: Date(),
+            notes: notes
+        )
+        storedRules.append(rule)
+        saveToDisk()
+    }
+
     func revokeRule(id: UUID) {
         storedRules.removeAll { $0.id == id }
         saveToDisk()
