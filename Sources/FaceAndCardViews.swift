@@ -944,7 +944,8 @@ final class PermissionPopupController {
 
     private func present(_ request: PermissionRequest, completion: @escaping (Decision) -> Void) {
         let model = PermissionModel(request: request)
-        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
+            ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
             ?? NSScreen.main
             ?? NSScreen.screens[0]
 
@@ -981,7 +982,9 @@ final class PermissionPopupController {
         }
 
         self.panel = panel
+        panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         model.start()
     }
 }

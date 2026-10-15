@@ -169,7 +169,7 @@ struct DashboardView: View {
 
                         Button {
                             Task {
-                                _ = await manager.evaluateOrAsk(PermissionRequest.samples[0])
+                                _ = await manager.evaluateOrAsk(PermissionRequest.samples[0], forcePrompt: true)
                             }
                         } label: {
                             HStack(spacing: 6) {
@@ -261,7 +261,7 @@ struct DashboardView: View {
                         // Quick Test Trigger
                         Button {
                             Task {
-                                _ = await manager.evaluateOrAsk(PermissionRequest.samples[0])
+                                _ = await manager.evaluateOrAsk(PermissionRequest.samples[0], forcePrompt: true)
                             }
                         } label: {
                             HStack(spacing: 5) {
@@ -554,7 +554,7 @@ struct OverviewTab: View {
 
                                 Button {
                                     Task {
-                                        _ = await manager.evaluateOrAsk(sample)
+                                        _ = await manager.evaluateOrAsk(sample, forcePrompt: true)
                                     }
                                 } label: {
                                     HStack(spacing: 5) {
@@ -1098,7 +1098,7 @@ add-zsh-hook preexec sentinel_preexec
                 directory: "~/Projects/workspace",
                 modifiesFiles: risk == .high ? "Yes, permanently" : "No"
             )
-            _ = await SentinelManager.shared.evaluateOrAsk(req)
+            _ = await SentinelManager.shared.evaluateOrAsk(req, forcePrompt: true)
         }
     }
 

@@ -34,21 +34,23 @@ final class SentinelManager: NSObject {
         setupMenuBar()
     }
 
-    func evaluateOrAsk(_ request: PermissionRequest) async -> Decision {
+    func evaluateOrAsk(_ request: PermissionRequest, forcePrompt: Bool = false) async -> Decision {
         guard isProtectionEnabled else {
             rulesEngine.recordDecision(request: request, decision: .allow(.once), autoAllowed: true)
             return .allow(.once)
         }
 
-        // 1. Check rules and active grants
-        if let autoDecision = rulesEngine.evaluate(request: request) {
+        // 1. Check rules and active grants (bypassed if forcePrompt is true)
+        if !forcePrompt, let autoDecision = rulesEngine.evaluate(request: request) {
             lastDecisionSummary = "Auto-\(autoDecision.summary): \(request.plainCommand)"
             return autoDecision
         }
 
-        // 2. Trigger Notch Popup
+        // 2. Deliver System Notification & Trigger Notch Popup
         pendingCount += 1
         updateMenuBarIcon()
+
+        deliverSystemNotification(for: request)
 
         let decision = await PermissionPopupController.shared.ask(request)
         rulesEngine.recordDecision(request: request, decision: decision, autoAllowed: false)
@@ -58,6 +60,15 @@ final class SentinelManager: NSObject {
         updateMenuBarIcon()
 
         return decision
+    }
+
+    private func deliverSystemNotification(for request: PermissionRequest) {
+        let notif = NSUserNotification()
+        notif.title = request.title
+        notif.subtitle = "\(request.requestedBy) • \(request.risk.label) Risk"
+        notif.informativeText = request.plainCommand
+        notif.soundName = NSUserNotificationDefaultSoundName
+        NSUserNotificationCenter.default.deliver(notif)
     }
 
     // MARK: - Menu Bar Setup
@@ -132,7 +143,7 @@ final class SentinelManager: NSObject {
         if index >= 0 && index < PermissionRequest.samples.count {
             let sample = PermissionRequest.samples[index]
             Task {
-                _ = await evaluateOrAsk(sample)
+                _ = await evaluateOrAsk(sample, forcePrompt: true)
             }
         }
     }
