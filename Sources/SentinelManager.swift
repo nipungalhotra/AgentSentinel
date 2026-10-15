@@ -67,7 +67,7 @@ final class SentinelManager: NSObject {
         notif.title = request.title
         notif.subtitle = "\(request.requestedBy) • \(request.risk.label) Risk"
         notif.informativeText = request.plainCommand
-        notif.soundName = NSUserNotificationDefaultSoundName
+        notif.soundName = nil // Silent notification banner; SoundEngine handles the elegant notch chime
         NSUserNotificationCenter.default.deliver(notif)
     }
 

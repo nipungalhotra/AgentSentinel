@@ -19,15 +19,41 @@ final class RulesEngine {
 
     // MARK: - Evaluation
 
+    // In-memory deduplication: prevent identical command popups within 5 seconds
+    private var recentApprovals: [String: Date] = [:]
+
+    private func isRecentlyApproved(command: String) -> Bool {
+        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let timestamp = recentApprovals[cmd] {
+            if Date().timeIntervalSince(timestamp) < 5.0 {
+                return true
+            } else {
+                recentApprovals.removeValue(forKey: cmd)
+            }
+        }
+        return false
+    }
+
+    private func recordRecentApproval(command: String) {
+        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        recentApprovals[cmd] = Date()
+    }
+
     func evaluate(request: PermissionRequest) -> Decision? {
         cleanupExpired()
 
-        // High risk operations cannot be automatically bypassed
+        let cmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 0. Deduplicate: if this exact command was approved in the last 5 seconds, auto-allow immediately
+        if isRecentlyApproved(command: cmd) {
+            recordDecision(request: request, decision: .allow(.once), autoAllowed: true)
+            return .allow(.once)
+        }
+
+        // High risk operations cannot be automatically bypassed by persistent rules
         if request.risk == .high {
             return nil
         }
-
-        let cmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 1. Check active temporary grants (10 min)
         if activeGrants.contains(where: {
@@ -51,6 +77,9 @@ final class RulesEngine {
     // MARK: - Recording
 
     func recordDecision(request: PermissionRequest, decision: Decision, autoAllowed: Bool = false) {
+        if decision.isAllowed {
+            recordRecentApproval(command: request.plainCommand)
+        }
         let entry = AuditLogEntry(
             timestamp: Date(),
             request: request,

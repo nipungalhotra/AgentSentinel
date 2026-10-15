@@ -357,6 +357,11 @@ final class PermissionModel {
             popTrigger += 1
             face = baseFace
 
+            // Seamless Touch ID: activate sensor automatically on appearance
+            if BiometricAuthManager.shared.isBiometricAvailable {
+                authenticateWithTouchID()
+            }
+
             guard await Self.pause(0.7) else { return }
             withAnimation(.linear(duration: timeout)) { ringRemaining = 0 }
 
@@ -431,12 +436,13 @@ final class PermissionModel {
     }
 
     func authenticateWithTouchID() {
-        guard isAsking, isHigh else { return }
-        Task {
+        guard isAsking else { return }
+        Task { [weak self] in
+            guard let self else { return }
             let success = await BiometricAuthManager.shared.authenticate(
-                reason: "Authorize high-risk action: \(request.plainCommand)"
+                reason: "Authorize \(request.title)"
             )
-            if success {
+            if success && isAsking {
                 SoundEngine.shared.playAllow()
                 decide(.allow(.once))
             }
@@ -771,46 +777,27 @@ struct PermissionCard: View {
             .buttonBorderShape(.capsule)
             .onHover { model.hovering(.deny, $0) }
 
-            if model.isHigh {
-                HStack(spacing: 8) {
-                    HoldToConfirmButton(model: model, title: "Hold to allow")
-
+            Button {
+                model.decide(.allow(model.scope))
+            } label: {
+                HStack(spacing: 7) {
                     if BiometricAuthManager.shared.isBiometricAvailable {
-                        Button {
-                            model.authenticateWithTouchID()
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "touchid")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(.orange)
-                                Text("Touch ID")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                            }
-                            .frame(height: 38)
-                            .padding(.horizontal, 10)
-                        }
-                        .glassCapsule(tint: Color.orange.opacity(0.18), interactive: true)
-                        .buttonStyle(.plain)
-                        .help("Authorize with Touch ID or Passcode")
+                        Image(systemName: "touchid")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(model.isHigh ? Color.orange : Color.green)
                     }
+                    Text(model.scope.allowLabel)
+                        .font(.system(size: 14, weight: .semibold))
+                    KeyHint("\u{21A9}")
                 }
-            } else {
-                Button {
-                    model.decide(.allow(model.scope))
-                } label: {
-                    HStack(spacing: 7) {
-                        Text(model.scope.allowLabel).font(.system(size: 14, weight: .semibold))
-                        KeyHint("\u{21A9}")
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 38)
-                }
-                .keyboardShortcut(.defaultAction)
-                .glassButton(prominent: true)
-                .buttonBorderShape(.capsule)
-                .tint(.blue)
-                .onHover { model.hovering(.allow, $0) }
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
             }
+            .keyboardShortcut(.defaultAction)
+            .glassButton(prominent: true)
+            .buttonBorderShape(.capsule)
+            .tint(model.isHigh ? .orange : .blue)
+            .onHover { model.hovering(.allow, $0) }
         }
     }
 }

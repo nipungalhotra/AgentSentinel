@@ -86,14 +86,74 @@ def normalize_tool_fields(payload):
             if sid:
                 payload['session_id'] = sid
 
-    # Directory
-    if not payload.get('cwd'):
-        for k in ['workdir', 'directory', 'workspaceRoot']:
+def resolve_directory(payload):
+    tool = payload.get('toolCall') or {}
+    tool_args = tool.get('args') if isinstance(tool.get('args'), dict) else (payload.get('tool_input') or {})
+    cwd = None
+    if isinstance(tool_args, dict):
+        cwd = tool_args.get('Cwd') or tool_args.get('cwd') or tool_args.get('DirectoryPath')
+
+    if not cwd and payload.get('workspacePaths') and len(payload['workspacePaths']) > 0:
+        cwd = payload['workspacePaths'][0]
+
+    if not cwd:
+        for k in ['workdir', 'directory', 'workspaceRoot', 'cwd']:
             if payload.get(k):
-                payload['cwd'] = payload[k]
+                cwd = payload[k]
                 break
-        if not payload.get('cwd'):
-            payload['cwd'] = os.getcwd()
+
+    if not cwd or cwd == '.':
+        cwd = os.getcwd()
+
+    cwd_str = str(cwd)
+    home = os.path.expanduser('~')
+    if cwd_str.startswith(home):
+        return '~' + cwd_str[len(home):]
+    return cwd_str
+
+def extract_modifies_files(payload, tool_name):
+    tool = payload.get('toolCall') or {}
+    args = tool.get('args') if isinstance(tool.get('args'), dict) else (payload.get('tool_input') or {})
+    if isinstance(args, dict):
+        for k in ['TargetFile', 'AbsolutePath', 'FilePath', 'file_path', 'path']:
+            if args.get(k):
+                val = str(args[k])
+                home = os.path.expanduser('~')
+                if val.startswith(home):
+                    return '~' + val[len(home):]
+                return val
+        if 'SearchPath' in args:
+            val = str(args['SearchPath'])
+            home = os.path.expanduser('~')
+            if val.startswith(home):
+                return '~' + val[len(home):]
+            return val
+    if tool_name == 'run_command':
+        return 'Terminal Shell'
+    return 'Workspace'
+
+def check_recent_dedup(tool_name, command):
+    try:
+        cache_path = '/tmp/sentinel_dedup.json'
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                data = json.load(f)
+                if data.get('tool') == tool_name and data.get('command') == command:
+                    import time
+                    if time.time() - data.get('time', 0) < 4.0:
+                        return True
+    except Exception:
+        pass
+    return False
+
+def record_recent_dedup(tool_name, command):
+    try:
+        import time
+        cache_path = '/tmp/sentinel_dedup.json'
+        with open(cache_path, 'w') as f:
+            json.dump({'tool': tool_name, 'command': command, 'time': time.time()}, f)
+    except Exception:
+        pass
 
 def extract_command(payload):
     tool_input = payload.get('tool_input') or {}
@@ -255,14 +315,24 @@ def main():
         command = extract_command(payload)
         risk = determine_risk(command, t_name)
 
+        # Check deduplication cache: if the exact same (tool, command) was approved within 4 seconds, auto-allow!
+        if check_recent_dedup(t_name, command):
+            out = {'decision': 'allow'}
+            sys.stdout.write(json.dumps(out) + '\n')
+            sys.stdout.flush()
+            sys.exit(0)
+
+        resolved_dir = resolve_directory(payload)
+        modifies_files = extract_modifies_files(payload, t_name)
+
         ask_data = {
             'command': command,
             'title': f"Authorize {t_name}?" if agent == 'antigravity' else f"{agent.replace('-', ' ').title()} Request",
             'subtitle': f"Antigravity IDE • {t_name}" if agent == 'antigravity' else f"{agent.replace('-', ' ').title()} • {t_name}",
             'risk': risk,
             'requestedBy': 'Antigravity IDE' if agent == 'antigravity' else agent,
-            'directory': payload.get('cwd', os.getcwd()),
-            'modifiesFiles': payload.get('tool_input', {}).get('file_path') or 'Workspace',
+            'directory': resolved_dir,
+            'modifiesFiles': modifies_files,
             'symbol': 'sparkles' if agent == 'antigravity' else ('terminal.fill' if 'Bash' in t_name else 'pencil.and.outline'),
             'tool': t_name,
             'forcePrompt': True,
@@ -297,6 +367,9 @@ def main():
             allowed = resp.get('allowed', False)
             decision = resp.get('decision', 'deny')
             scope = resp.get('scope', 'once')
+
+            if allowed:
+                record_recent_dedup(t_name, command)
 
             # Official Google Antigravity IDE Contract (docs/hooks.md)
             if agent == 'antigravity':
