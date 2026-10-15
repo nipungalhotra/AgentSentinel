@@ -4,18 +4,18 @@ import AppKit
 struct DashboardView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case overview = "Overview"
+        case integrations = "Agent Integrations"
         case audit = "Audit Log"
         case rules = "Rules & Grants"
-        case cli = "CLI & Agent Setup"
 
         var id: String { rawValue }
 
         var icon: String {
             switch self {
             case .overview: return "shield.checkered"
+            case .integrations: return "sparkles.rectangle.stack.fill"
             case .audit: return "list.bullet.rectangle.portrait"
             case .rules: return "slider.horizontal.3"
-            case .cli: return "terminal"
             }
         }
     }
@@ -171,8 +171,8 @@ struct DashboardView: View {
                         AuditLogTab()
                     case .rules:
                         RulesTab()
-                    case .cli:
-                        CLIIntegrationTab()
+                    case .integrations:
+                        AgentIntegrationsTab()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -506,11 +506,15 @@ struct RulesTab: View {
 
 // MARK: - AI Agent & CLI Integrations Tab
 
-struct CLIIntegrationTab: View {
+struct AgentIntegrationsTab: View {
     @State private var allInstalled = false
     @State private var claudeInstalled = false
-    @State private var cursorInstalled = false
+    @State private var coworkInstalled = false
     @State private var antigravityInstalled = false
+    @State private var cursorInstalled = false
+    @State private var codexInstalled = false
+    @State private var chatgptInstalled = false
+    @State private var copilotInstalled = false
     @State private var zshInstalled = false
     @State private var copiedSnippet = false
     @State private var selectedSnippet = 0
@@ -562,18 +566,18 @@ main();
                 // Header Banner
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Universal AI Agent & Tool Integrations")
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Universal AI Agent Hub & Integrations")
                                 .font(.title3.bold())
-                            Text("Seamlessly guards actions for Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, and your terminal shell.")
+                            Text("Modeled after Coucou: seamlessly intercepts actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
 
-                        Button(allInstalled ? "✓ All Configured" : "🚀 1-Click Setup All") {
-                            runInstallCommand("all")
-                            allInstalled = true
+                        Button(allInstalled ? "✓ All Agents Guarded" : "🚀 1-Click Setup All") {
+                            _ = HookInstaller.shared.installAll()
+                            checkStatus()
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(allInstalled ? .green : .blue)
@@ -583,100 +587,180 @@ main();
                 .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.04)))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
 
-                // Integration Cards Grid
+                // Integration Cards Grid (8 Core Agents & Tools)
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-                    // 1. Claude Code & Cowork
+                    // 1. Claude Code
+                    let pClaude = PillCatalog.definition(for: "claude-code")
                     agentCard(
-                        title: "Claude Code & Cowork",
-                        subtitle: "Anthropic Claude CLI & Desktop",
-                        icon: "sparkles",
-                        color: .purple,
-                        details: "Configures MCP in ~/.claude.json & claude_desktop_config.json",
+                        pill: pClaude,
+                        details: "Native hook in ~/.claude/settings.json (PermissionRequest, PreToolUse, AskUserQuestion)",
                         isInstalled: claudeInstalled,
                         onInstall: {
-                            runInstallCommand("claude")
-                            claudeInstalled = true
+                            try? HookInstaller.shared.installClaudeCodeHooks()
+                            checkStatus()
                         },
                         onTest: {
                             triggerTest(
-                                title: "Run build & test suite?",
+                                title: "Execute Destructive Cleanup?",
                                 subtitle: "Claude Code • Bash",
-                                command: "npm run test:ci",
-                                risk: .medium,
+                                command: "rm -rf node_modules && npm test",
+                                risk: .high,
                                 agent: "Claude Code",
-                                symbol: "sparkles"
+                                symbol: pClaude.iconSystemName
                             )
                         }
                     )
 
-                    // 2. Antigravity & Antigravity IDE
+                    // 2. Cowork (Claude Desktop)
+                    let pCowork = PillCatalog.definition(for: "cowork")
                     agentCard(
-                        title: "Antigravity IDE",
-                        subtitle: "Google Antigravity Agent",
-                        icon: "atom",
-                        color: .cyan,
-                        details: "Registers MCP schema in ~/.gemini/antigravity-ide/mcp/sentinel",
+                        pill: pCowork,
+                        details: "Model Context Protocol in claude_desktop_config.json",
+                        isInstalled: coworkInstalled,
+                        onInstall: {
+                            try? HookInstaller.shared.installCoworkMCP()
+                            checkStatus()
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Read SSH Private Key?",
+                                subtitle: "Cowork • KeyAccess",
+                                command: "cat ~/.ssh/id_rsa | base64",
+                                risk: .high,
+                                agent: "Cowork",
+                                symbol: pCowork.iconSystemName
+                            )
+                        }
+                    )
+
+                    // 3. Antigravity & IDE
+                    let pAgy = PillCatalog.definition(for: "antigravity")
+                    agentCard(
+                        pill: pAgy,
+                        details: "Native hooks in ~/.gemini/config/hooks.json & Antigravity MCP tool registry",
                         isInstalled: antigravityInstalled,
                         onInstall: {
-                            runInstallCommand("antigravity")
-                            antigravityInstalled = true
+                            try? HookInstaller.shared.installAntigravityHooks()
+                            checkStatus()
                         },
                         onTest: {
                             triggerTest(
-                                title: "Deploy containerized service?",
+                                title: "Deploy Service to Cloud Run?",
                                 subtitle: "Antigravity • CloudRun",
-                                command: "gcloud run deploy agent-sentinel",
+                                command: "gcloud run deploy agent-sentinel --region=us-central1",
                                 risk: .medium,
                                 agent: "Antigravity",
-                                symbol: "atom"
+                                symbol: pAgy.iconSystemName
                             )
                         }
                     )
 
-                    // 3. Cursor & Codex
+                    // 4. Cursor
+                    let pCursor = PillCatalog.definition(for: "cursor")
                     agentCard(
-                        title: "Cursor & OpenAI Codex",
-                        subtitle: "Cursor IDE & Agentic Codex",
-                        icon: "terminal.fill",
-                        color: .green,
-                        details: "Configures MCP in ~/.cursor/mcp.json for all workspaces",
+                        pill: pCursor,
+                        details: "Workspace MCP server configured in ~/.cursor/mcp.json",
                         isInstalled: cursorInstalled,
                         onInstall: {
-                            runInstallCommand("cursor")
-                            cursorInstalled = true
+                            try? HookInstaller.shared.installCursorMCP()
+                            checkStatus()
                         },
                         onTest: {
                             triggerTest(
-                                title: "Execute training script?",
-                                subtitle: "Codex • PythonRunner",
-                                command: "python3 train.py --epochs=100",
-                                risk: .low,
-                                agent: "Codex",
-                                symbol: "terminal"
+                                title: "Force Push to Main Branch?",
+                                subtitle: "Cursor • GitSync",
+                                command: "git push origin main --force",
+                                risk: .high,
+                                agent: "Cursor",
+                                symbol: pCursor.iconSystemName
                             )
                         }
                     )
 
-                    // 4. Universal ZSH Terminal Hook
+                    // 5. Codex
+                    let pCodex = PillCatalog.definition(for: "codex")
                     agentCard(
-                        title: "Terminal Shell Gate",
-                        subtitle: "ZSH preexec Auto-Gate",
-                        icon: "shield.lefthalf.filled",
-                        color: .orange,
-                        details: "Automatically prompts for risky commands (rm -rf, sudo) in any shell",
-                        isInstalled: zshInstalled,
+                        pill: pCodex,
+                        details: "Native hook in ~/.codex/hooks.json (PermissionRequest)",
+                        isInstalled: codexInstalled,
                         onInstall: {
-                            runInstallCommand("zsh")
-                            zshInstalled = true
+                            try? HookInstaller.shared.installCodexHooks()
+                            checkStatus()
                         },
                         onTest: {
                             triggerTest(
-                                title: "Delete these files permanently?",
+                                title: "Install System Dependencies?",
+                                subtitle: "Codex • PipInstaller",
+                                command: "python3 -m pip install -r requirements.txt",
+                                risk: .low,
+                                agent: "Codex",
+                                symbol: pCodex.iconSystemName
+                            )
+                        }
+                    )
+
+                    // 6. ChatGPT Desktop
+                    let pGpt = PillCatalog.definition(for: "chatgpt")
+                    agentCard(
+                        pill: pGpt,
+                        details: "Custom Agent SDK & Codex Gateway Bridge",
+                        isInstalled: chatgptInstalled,
+                        onInstall: {
+                            try? HookInstaller.shared.installCodexHooks()
+                            checkStatus()
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Execute Database Migration?",
+                                subtitle: "ChatGPT • SchemaMigrator",
+                                command: "DROP TABLE legacy_users; ALTER TABLE accounts ADD COLUMN tier TEXT;",
+                                risk: .high,
+                                agent: "ChatGPT",
+                                symbol: pGpt.iconSystemName
+                            )
+                        }
+                    )
+
+                    // 7. Copilot CLI
+                    let pCopilot = PillCatalog.definition(for: "copilot")
+                    agentCard(
+                        pill: pCopilot,
+                        details: "GitHub Copilot hooks in ~/.copilot/hooks/sentinel.json",
+                        isInstalled: copilotInstalled,
+                        onInstall: {
+                            try? HookInstaller.shared.installCopilotHooks()
+                            checkStatus()
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Create Pull Request & Auto-Merge?",
+                                subtitle: "Copilot CLI • GitHubAction",
+                                command: "gh pr merge 42 --auto --squash",
+                                risk: .medium,
+                                agent: "Copilot CLI",
+                                symbol: pCopilot.iconSystemName
+                            )
+                        }
+                    )
+
+                    // 8. Terminal Shell Gate
+                    let pTerm = PillCatalog.definition(for: "terminal")
+                    agentCard(
+                        pill: pTerm,
+                        details: "ZSH preexec auto-interceptor in ~/.zshrc",
+                        isInstalled: zshInstalled,
+                        onInstall: {
+                            try? HookInstaller.shared.installZshHook()
+                            checkStatus()
+                        },
+                        onTest: {
+                            triggerTest(
+                                title: "Delete Build Cache Permanently?",
                                 subtitle: "Terminal • Shell Gate",
                                 command: "rm -rf ~/Projects/old-build",
                                 risk: .high,
-                                agent: "ZSH Terminal",
-                                symbol: "trash"
+                                agent: "Terminal",
+                                symbol: pTerm.iconSystemName
                             )
                         }
                     )
@@ -736,10 +820,7 @@ main();
     }
 
     private func agentCard(
-        title: String,
-        subtitle: String,
-        icon: String,
-        color: Color,
+        pill: PillDefinition,
         details: String,
         isInstalled: Bool,
         onInstall: @escaping () -> Void,
@@ -749,34 +830,48 @@ main();
             HStack(spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(color.opacity(0.18))
+                        .fill(pill.color.opacity(0.18))
                         .frame(width: 32, height: 32)
-                    Image(systemName: icon)
+                    Image(systemName: pill.iconSystemName)
                         .font(.system(size: 15))
-                        .foregroundStyle(color)
+                        .foregroundStyle(pill.color)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(pill.name)
                         .font(.system(size: 13, weight: .bold))
-                    Text(subtitle)
+                    Text(pill.subtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
-                    Text("Ready")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.green)
+                if isInstalled {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 6, height: 6)
+                        Text("Active & Guarded")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.green)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(Color.green.opacity(0.12), in: Capsule())
+                } else {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.secondary)
+                            .frame(width: 6, height: 6)
+                        Text("Not Configured")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
                 }
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(Color.green.opacity(0.12), in: Capsule())
             }
 
             Text(details)
@@ -787,29 +882,20 @@ main();
             Divider()
 
             HStack {
-                Button("Test Popup", action: onTest)
+                Button("Test Notch Popup", action: onTest)
                     .controlSize(.small)
 
                 Spacer()
 
-                Button(isInstalled ? "✓ Configured" : "Configure", action: onInstall)
+                Button(isInstalled ? "Reconfigure" : "Configure Hook", action: onInstall)
                     .buttonStyle(.borderedProminent)
-                    .tint(isInstalled ? .green : .blue)
+                    .tint(isInstalled ? .secondary : pill.color)
                     .controlSize(.small)
             }
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color.primary.opacity(0.035)))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
-    }
-
-    private func runInstallCommand(_ target: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        let scriptPath = "/Users/nipun/.local/bin/sentinel"
-        process.arguments = [scriptPath, "install", target]
-        try? process.run()
-        process.waitUntilExit()
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(isInstalled ? pill.color.opacity(0.25) : Color.primary.opacity(0.07), lineWidth: 1))
     }
 
     private func triggerTest(title: String, subtitle: String, command: String, risk: Risk, agent: String, symbol: String) {
@@ -821,7 +907,7 @@ main();
                 command: command,
                 risk: risk,
                 requestedBy: agent,
-                directory: "~/Projects/demo",
+                directory: "~/Projects/workspace",
                 modifiesFiles: risk == .high ? "Yes, permanently" : "No"
             )
             _ = await SentinelManager.shared.evaluateOrAsk(req)
@@ -829,13 +915,16 @@ main();
     }
 
     private func checkStatus() {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-
-        claudeInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".claude.json").path)
-        cursorInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".cursor/mcp.json").path)
-        antigravityInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".gemini/antigravity-ide/mcp/sentinel").path)
-        zshInstalled = fileManager.fileExists(atPath: home.appendingPathComponent(".local/share/sentinel/sentinel-hook.zsh").path)
-        allInstalled = claudeInstalled && cursorInstalled && antigravityInstalled && zshInstalled
+        let installer = HookInstaller.shared
+        claudeInstalled = installer.isClaudeCodeInstalled()
+        coworkInstalled = installer.isCoworkInstalled()
+        antigravityInstalled = installer.isAntigravityInstalled()
+        cursorInstalled = installer.isCursorInstalled()
+        codexInstalled = installer.isCodexInstalled()
+        chatgptInstalled = installer.isCodexInstalled()
+        copilotInstalled = installer.isCopilotInstalled()
+        zshInstalled = installer.isZshInstalled()
+        allInstalled = claudeInstalled && coworkInstalled && antigravityInstalled && cursorInstalled && codexInstalled && zshInstalled
     }
 }
+

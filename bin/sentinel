@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 
 # Agent Sentinel Universal CLI & Agent Dispatcher
-# Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, and ZSH
+# Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, Copilot, and ZSH Shells.
+# Modeled after Coucou (https://github.com/Louis-CFM/coucou) architecture
 
 SENTINEL_DIR="/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel"
 MCP_SERVER="$SENTINEL_DIR/bin/sentinel-mcp.js"
+HOOK_SCRIPT="$HOME/Library/Application Support/AgentSentinel/sentinel-hook"
 PORT=9191
 
 ensure_daemon() {
   if ! curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
     echo "🛡️ Starting Agent Sentinel daemon..."
     open "$SENTINEL_DIR/AgentSentinel.app"
-    for i in {1..10}; do
+    for i in {1..12}; do
       if curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
         break
       fi
-      sleep 0.3
+      sleep 0.25
     done
   fi
+}
+
+deploy_hook_script() {
+  mkdir -p "$HOME/Library/Application Support/AgentSentinel"
+  cp "$SENTINEL_DIR/bin/sentinel-hook" "$HOOK_SCRIPT"
+  chmod +x "$HOOK_SCRIPT"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$HOOK_SCRIPT" "$HOME/.local/bin/sentinel-hook"
 }
 
 cmd_status() {
@@ -49,7 +59,7 @@ cmd_run() {
   PAYLOAD=$(cat <<EOF
 {
   "command": "$CMD",
-  "requestedBy": "$USER_NAME (Terminal)",
+  "requestedBy": "Terminal",
   "directory": "$DIR",
   "tool": "Bash"
 }
@@ -71,10 +81,11 @@ EOF
 }
 
 cmd_install_claude() {
-  echo "🟣 Configuring Claude Code & Claude Desktop (Cowork)..."
+  echo "🟣 Configuring Claude Code native hooks & Claude Desktop (Cowork)..."
+  deploy_hook_script
   NODE_PATH=$(which node)
 
-  # 1. Claude Desktop (Cowork) config
+  # 1. Claude Desktop (Cowork) MCP
   CLAUDE_DESKTOP_DIR="$HOME/Library/Application Support/Claude"
   CLAUDE_DESKTOP_CONFIG="$CLAUDE_DESKTOP_DIR/claude_desktop_config.json"
   mkdir -p "$CLAUDE_DESKTOP_DIR"
@@ -114,10 +125,51 @@ data['mcpServers']['sentinel'] = {
 with open(path, 'w') as f: json.dump(data, f, indent=2)
 print('✓ Updated ' + path)
 "
+
+  # 3. Claude Code settings.json Native Hooks (Coucou parity)
+  CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude"
+  python3 -c "
+import json, os
+path = os.path.expanduser('$CLAUDE_SETTINGS')
+try:
+    with open(path, 'r') as f: root = json.load(f)
+except Exception:
+    root = {}
+hooks = root.get('hooks', {})
+
+events = [
+    ('SessionStart', 10), ('SessionEnd', 10),
+    ('UserPromptSubmit', 10),
+    ('PreToolUse', 10), ('PostToolUse', 10), ('PostToolUseFailure', 10),
+    ('PermissionRequest', 120),
+    ('Notification', 10),
+    ('Stop', 10), ('SubagentStart', 10), ('SubagentStop', 10)
+]
+cmd = '/bin/sh \"$HOOK_SCRIPT\" --agent claude-code'
+
+for event, timeout in events:
+    existing = hooks.get(event, [])
+    cleaned = [g for g in existing if not any('sentinel-hook' in h.get('command', '') for h in g.get('hooks', []))]
+    cleaned.append({'hooks': [{'type': 'command', 'command': f'{cmd} {event}', 'timeout': timeout}]})
+    hooks[event] = cleaned
+
+# AskUserQuestion hook
+pre = hooks.get('PreToolUse', [])
+pre = [g for g in pre if g.get('matcher') != 'AskUserQuestion']
+pre.append({
+    'matcher': 'AskUserQuestion',
+    'hooks': [{'type': 'command', 'command': f'{cmd} --ask', 'timeout': 130}]
+})
+hooks['PreToolUse'] = pre
+root['hooks'] = hooks
+with open(path, 'w') as f: json.dump(root, f, indent=2)
+print('✓ Registered Claude Code native hooks in ' + path)
+"
 }
 
 cmd_install_cursor() {
-  echo "🟩 Configuring Cursor & Codex..."
+  echo "🟩 Configuring Cursor..."
   NODE_PATH=$(which node)
   CURSOR_CONFIG="$HOME/.cursor/mcp.json"
   mkdir -p "$HOME/.cursor"
@@ -140,12 +192,79 @@ print('✓ Updated ' + path)
 "
 }
 
+cmd_install_codex() {
+  echo "🟩 Configuring Codex & ChatGPT hooks..."
+  deploy_hook_script
+  CODEX_CONFIG="$HOME/.codex/hooks.json"
+  mkdir -p "$HOME/.codex"
+
+  python3 -c "
+import json, os
+path = os.path.expanduser('$CODEX_CONFIG')
+try:
+    with open(path, 'r') as f: root = json.load(f)
+except Exception:
+    root = {}
+hooks = root.get('hooks', {})
+cmd = '/bin/sh \"$HOOK_SCRIPT\" --agent codex'
+
+events = [
+    ('SessionStart', 10, None),
+    ('UserPromptSubmit', 10, None),
+    ('PreToolUse', 10, None),
+    ('PermissionRequest', 120, 'Waiting for permission in the notch (Agent Sentinel)'),
+    ('PostToolUse', 10, None),
+    ('Stop', 10, None),
+    ('SessionEnd', 10, None)
+]
+
+for event, timeout, msg in events:
+    existing = hooks.get(event, [])
+    cleaned = [g for g in existing if not any('sentinel-hook' in h.get('command', '') for h in g.get('hooks', []))]
+    entry = {'type': 'command', 'command': f'{cmd} {event}', 'timeout': timeout}
+    if msg: entry['statusMessage'] = msg
+    cleaned.append({'hooks': [entry]})
+    hooks[event] = cleaned
+
+root['hooks'] = hooks
+with open(path, 'w') as f: json.dump(root, f, indent=2)
+print('✓ Updated ' + path)
+"
+}
+
 cmd_install_antigravity() {
   echo "🔵 Configuring Antigravity & Antigravity IDE..."
-  AGY_DIR="$HOME/.gemini/antigravity-ide/mcp/sentinel"
-  mkdir -p "$AGY_DIR"
+  deploy_hook_script
 
-  cat << 'EOF' > "$AGY_DIR/request_permission.json"
+  # 1. Native hooks (~/.gemini/config/hooks.json)
+  AGY_CONFIG="$HOME/.gemini/config/hooks.json"
+  mkdir -p "$HOME/.gemini/config"
+
+  python3 -c "
+import json, os
+path = os.path.expanduser('$AGY_CONFIG')
+try:
+    with open(path, 'r') as f: root = json.load(f)
+except Exception:
+    root = {}
+cmd = '/bin/sh \"$HOOK_SCRIPT\" --agent antigravity'
+
+sentinel = {
+    'PreToolUse': [{'matcher': '*', 'hooks': [{'type': 'command', 'command': f'{cmd} PreToolUse', 'timeout': 120}]}],
+    'PostToolUse': [{'matcher': '*', 'hooks': [{'type': 'command', 'command': f'{cmd} PostToolUse', 'timeout': 10}]}],
+    'PreInvocation': [{'type': 'command', 'command': f'{cmd} PreInvocation', 'timeout': 10}],
+    'Stop': [{'type': 'command', 'command': f'{cmd} Stop', 'timeout': 10}]
+}
+root['sentinel'] = sentinel
+with open(path, 'w') as f: json.dump(root, f, indent=2)
+print('✓ Registered Antigravity hooks in ' + path)
+"
+
+  # 2. MCP Tool Schema
+  AGY_MCP_DIR="$HOME/.gemini/antigravity-ide/mcp/sentinel"
+  mkdir -p "$AGY_MCP_DIR"
+
+  cat << 'EOF' > "$AGY_MCP_DIR/request_permission.json"
 {
   "name": "sentinel_request_permission",
   "description": "Requests user authorization via macOS Liquid Glass popup anchored below MacBook camera notch. Call before running sensitive terminal commands, modifying code, or performing external operations.",
@@ -164,13 +283,13 @@ cmd_install_antigravity() {
 }
 EOF
 
-  cat << 'EOF' > "$AGY_DIR/instructions.md"
+  cat << 'EOF' > "$AGY_MCP_DIR/instructions.md"
 # Agent Sentinel MCP Server
 Sentinel intercepts AI actions with an expressive native macOS Liquid Glass permission popup anchored beneath the MacBook notch.
 Before running sensitive commands (rm -rf, git push, deployment, install), call `sentinel_request_permission`.
 EOF
 
-  echo "✓ Registered in $AGY_DIR"
+  echo "✓ Registered MCP schema in $AGY_MCP_DIR"
 }
 
 cmd_install_zsh() {
@@ -209,11 +328,62 @@ EOF
 
 cmd_install_all() {
   echo "🚀 Setting up Agent Sentinel across all AI agents and environments..."
+  deploy_hook_script
   cmd_install_claude
   cmd_install_cursor
+  cmd_install_codex
   cmd_install_antigravity
   cmd_install_zsh
   echo "🎉 All integrations installed successfully!"
+}
+
+cmd_test() {
+  ensure_daemon
+  AGENT="${1:-claude-code}"
+  echo "🧪 Triggering simulated permission popup for: $AGENT..."
+
+  case "$AGENT" in
+    antigravity)
+      CMD="gcloud run deploy agent-sentinel --region=us-central1"
+      TITLE="Deploy to Cloud Run?"
+      SUBTITLE="Antigravity • DeployService"
+      RISK="medium"
+      SYM="sparkles"
+      ;;
+    codex|chatgpt)
+      CMD="python3 -m pip install -r requirements.txt"
+      TITLE="Install Dependencies?"
+      SUBTITLE="Codex • PipInstaller"
+      RISK="low"
+      SYM="curlybraces"
+      ;;
+    cursor)
+      CMD="git push origin main --force"
+      TITLE="Force Push to Main Branch?"
+      SUBTITLE="Cursor • GitSync"
+      RISK="high"
+      SYM="chevron.left.forwardslash.chevron.right"
+      ;;
+    cowork)
+      CMD="cat ~/.ssh/id_rsa | base64"
+      TITLE="Read SSH Private Key?"
+      SUBTITLE="Cowork • KeyAccess"
+      RISK="high"
+      SYM="app.badge.checkmark"
+      ;;
+    *)
+      CMD="rm -rf /var/log/app && npm test"
+      TITLE="Execute Destructive Cleanup?"
+      SUBTITLE="Claude Code • Bash"
+      RISK="high"
+      SYM="terminal.fill"
+      ;;
+  esac
+
+  curl -s -X POST "http://127.0.0.1:$PORT/ask" \
+    -H "Content-Type: application/json" \
+    -d "{\"command\":\"$CMD\",\"title\":\"$TITLE\",\"subtitle\":\"$SUBTITLE\",\"risk\":\"$RISK\",\"requestedBy\":\"$AGENT\",\"symbol\":\"$SYM\"}"
+  echo ""
 }
 
 # Main command router
@@ -228,25 +398,31 @@ case "$1" in
   status)
     cmd_status
     ;;
+  test)
+    shift
+    cmd_test "$@"
+    ;;
   install)
     case "$2" in
       claude) cmd_install_claude ;;
       cursor) cmd_install_cursor ;;
+      codex|chatgpt) cmd_install_codex ;;
       antigravity) cmd_install_antigravity ;;
       zsh) cmd_install_zsh ;;
       all|"") cmd_install_all ;;
-      *) echo "Unknown integration: $2 (choose claude, cursor, antigravity, zsh, all)" ;;
+      *) echo "Unknown integration: $2 (choose claude, cursor, codex, antigravity, zsh, all)" ;;
     esac
     ;;
   help|--help|-h|"")
-    echo "Agent Sentinel Universal CLI"
+    echo "Agent Sentinel Universal CLI (Coucou-parity)"
     echo ""
     echo "Usage:"
-    echo "  sentinel run <command>       Guards a command with the Liquid Glass popup"
+    echo "  sentinel run <command>       Guards a command with the Liquid Glass notch popup"
+    echo "  sentinel test <agent>        Tests live notch popup (claude, antigravity, codex, cursor, cowork)"
     echo "  sentinel mcp                 Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
     echo "  sentinel status              Displays daemon status"
-    echo "  sentinel install <target>    Installs integration (claude, cursor, antigravity, zsh, all)"
-    echo "  sentinel install all         Configures Claude Code, Cowork, Antigravity, Cursor, and ZSH"
+    echo "  sentinel install <target>    Installs integration (claude, cursor, codex, antigravity, zsh, all)"
+    echo "  sentinel install all         Configures all AI coding assistants in 1 click"
     ;;
   *)
     # Default: guard the passed command

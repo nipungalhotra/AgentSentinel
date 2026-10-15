@@ -20,7 +20,10 @@ final class SentinelManager: NSObject {
     }
 
     func startup() {
-        // Setup IPC Server
+        // Deploy universal hook script
+        HookInstaller.shared.deployHookScript()
+
+        // Setup IPC Server (HTTP + Unix Socket)
         ipcServer.onRequestReceived = { [weak self] req in
             guard let self else { return .deny }
             return await self.evaluateOrAsk(req)

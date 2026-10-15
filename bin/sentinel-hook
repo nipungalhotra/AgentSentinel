@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""
+sentinel-hook — Universal AI Agent Hook Relay for Agent Sentinel
+Compatible with Claude Code, Cowork, Antigravity, Codex, Cursor, Gemini CLI, and Shells.
+Reference: https://github.com/Louis-CFM/coucou architecture
+"""
+
+import sys
+import json
+import os
+import socket
+import urllib.request
+import urllib.error
+
+# Event name normalization mapping
+EVENT_MAP = {
+    'BeforeTool': 'PreToolUse',
+    'BeforeToolSelection': 'PreToolUse',
+    'AfterTool': 'PostToolUse',
+    'AfterModel': 'PostToolUse',
+    'BeforeAgent': 'UserPromptSubmit',
+    'AfterAgent': 'Stop',
+    'startup': 'SessionStart',
+    'exit': 'SessionEnd',
+    'PreInvocation': 'UserPromptSubmit',
+    'PostInvocation': 'PostToolUse',
+    'pre_tool_use': 'PreToolUse',
+    'post_tool_use': 'PostToolUse',
+    'user_prompt_submit': 'UserPromptSubmit',
+    'session_start': 'SessionStart',
+    'session_end': 'SessionEnd',
+    'stop': 'Stop',
+    'sessionStart': 'SessionStart',
+    'userPromptSubmitted': 'UserPromptSubmit',
+    'agentStop': 'Stop',
+    'notification': 'Notification',
+    'preToolUse': 'PreToolUse',
+    'postToolUse': 'PostToolUse',
+    'permissionRequest': 'PermissionRequest',
+    'PermissionRequest': 'PermissionRequest',
+    'sessionEnd': 'SessionEnd',
+}
+
+def normalize_event(name):
+    return EVENT_MAP.get(name, name)
+
+def normalize_tool_fields(payload):
+    # Tool Name
+    if 'tool_name' not in payload:
+        if payload.get('toolName'):
+            payload['tool_name'] = payload['toolName']
+        else:
+            tool = payload.get('toolCall')
+            if isinstance(tool, dict):
+                name = tool.get('name') or payload.get('tool', '')
+                if name:
+                    payload['tool_name'] = name
+            elif payload.get('tool'):
+                payload['tool_name'] = payload['tool']
+
+    # Tool Input / Command
+    if 'tool_input' not in payload:
+        tool_args = payload.get('toolArgs')
+        if isinstance(tool_args, dict):
+            payload['tool_input'] = tool_args
+        else:
+            tool = payload.get('toolCall') or {}
+            if isinstance(tool.get('args'), dict):
+                flat = dict(tool['args'])
+                for src, dst in [('CommandLine', 'command'), ('FilePath', 'file_path'),
+                                 ('Path', 'path'), ('Url', 'url'), ('Query', 'query'), ('Pattern', 'pattern')]:
+                    if src in flat:
+                        flat[dst] = flat[src]
+                payload['tool_input'] = flat
+
+    # Session ID
+    if 'session_id' not in payload:
+        for k in ['conversationId', 'conversation_id', 'sessionId', 'GEMINI_SESSION_ID']:
+            if payload.get(k):
+                payload['session_id'] = payload[k]
+                break
+        if 'session_id' not in payload:
+            sid = os.environ.get('GEMINI_SESSION_ID', '')
+            if sid:
+                payload['session_id'] = sid
+
+    # Directory
+    if not payload.get('cwd'):
+        for k in ['workdir', 'directory', 'workspaceRoot']:
+            if payload.get(k):
+                payload['cwd'] = payload[k]
+                break
+        if not payload.get('cwd'):
+            payload['cwd'] = os.getcwd()
+
+def extract_command(payload):
+    tool_input = payload.get('tool_input') or {}
+    if isinstance(tool_input, dict):
+        if 'command' in tool_input:
+            return str(tool_input['command'])
+        if 'CommandLine' in tool_input:
+            return str(tool_input['CommandLine'])
+        if 'file_path' in tool_input:
+            return f"Edit {tool_input.get('file_path')}"
+        if 'TargetFile' in tool_input:
+            return f"Write {tool_input.get('TargetFile')}"
+        if 'url' in tool_input:
+            return f"Fetch {tool_input.get('url')}"
+
+    cmd = payload.get('command') or payload.get('tool_name') or 'Execute Tool'
+    return str(cmd)
+
+def determine_risk(command, tool_name):
+    cmd_lower = (command or '').lower()
+    t_lower = (tool_name or '').lower()
+
+    high_risk_patterns = [
+        'rm -rf', 'rm -r', 'rmdir', 'dd ', 'mkfs', 'shutdown',
+        'sudo ', 'chmod -r 777', 'chown -r', 'kill -9',
+        '> /dev/sd', 'drop database', 'drop table', 'truncate table',
+        ':(){ :|:& };:'
+    ]
+    for pat in high_risk_patterns:
+        if pat in cmd_lower:
+            return 'high'
+
+    medium_risk_patterns = [
+        'git push --force', 'git reset --hard', 'npm publish', 'pip install',
+        'brew install', 'curl ', 'wget ', 'pkill', 'kill ', 'mv ', 'cp -r',
+        'write_to_file', 'replace_file_content'
+    ]
+    for pat in medium_risk_patterns:
+        if pat in cmd_lower or pat in t_lower:
+            return 'medium'
+
+    return 'low'
+
+def send_via_socket(payload, socket_path, timeout=118):
+    if not os.path.exists(socket_path):
+        return None
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(socket_path)
+        msg = (json.dumps(payload) + '\n').encode('utf-8')
+        s.sendall(msg)
+
+        chunks = []
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b'\n' in chunk:
+                break
+        s.close()
+        response = b''.join(chunks).decode('utf-8').strip()
+        if response:
+            return json.loads(response)
+    except Exception:
+        return None
+    return None
+
+def send_via_http(payload, port=9191, timeout=120):
+    url = f"http://127.0.0.1:{port}/ask"
+    req_body = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(
+        url,
+        data=req_body,
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read()
+            return json.loads(data.decode('utf-8'))
+    except Exception:
+        return None
+
+def main():
+    # Parse CLI flags
+    args = sys.argv[1:]
+    agent = 'claude-code'
+    event_arg = None
+    is_ask_mode = False
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '--agent' and i + 1 < len(args):
+            agent = args[i + 1]
+            i += 2
+        elif a == '--ask':
+            is_ask_mode = True
+            i += 1
+        elif not a.startswith('--') and event_arg is None:
+            event_arg = a
+            i += 1
+        else:
+            i += 1
+
+    # Read stdin payload if available
+    raw = b''
+    payload = {}
+    try:
+        if not sys.stdin.isatty():
+            raw = sys.stdin.buffer.read()
+            if raw:
+                payload = json.loads(raw.decode('utf-8'))
+    except Exception:
+        pass
+
+    event = event_arg or payload.get('hook_event_name') or payload.get('event') or 'PermissionRequest'
+    event = normalize_event(event)
+    payload['hook_event_name'] = event
+    payload['requestedBy'] = payload.get('requestedBy') or agent
+    normalize_tool_fields(payload)
+
+    # AskUserQuestion mode
+    if is_ask_mode or payload.get('tool_name') == 'AskUserQuestion':
+        payload['coucou_kind'] = 'ask_user_question'
+        event = 'PermissionRequest'
+
+    socket_path = os.path.expanduser('~/Library/Application Support/AgentSentinel/sentinel.sock')
+
+    # If event is PermissionRequest or PreToolUse requiring gating:
+    if event == 'PermissionRequest' or (agent == 'antigravity' and event == 'PreToolUse'):
+        command = extract_command(payload)
+        risk = determine_risk(command, payload.get('tool_name', ''))
+
+        ask_data = {
+            'command': command,
+            'title': f"{agent.replace('-', ' ').title()} Request",
+            'subtitle': f"{agent.replace('-', ' ').title()} • {payload.get('tool_name', 'Tool')}",
+            'risk': risk,
+            'requestedBy': agent,
+            'directory': payload.get('cwd', os.getcwd()),
+            'modifiesFiles': payload.get('tool_input', {}).get('file_path') or 'Workspace',
+            'symbol': 'terminal.fill' if 'Bash' in payload.get('tool_name', '') else 'pencil.and.outline',
+            'tool': payload.get('tool_name', 'Command'),
+            'raw': payload
+        }
+
+        # Try Unix domain socket first, fallback to HTTP 127.0.0.1:9191
+        resp = send_via_socket(ask_data, socket_path)
+        if not resp:
+            resp = send_via_http(ask_data, port=int(os.environ.get('SENTINEL_PORT', 9191)))
+
+        if resp:
+            allowed = resp.get('allowed', False)
+            decision = resp.get('decision', 'deny')
+            scope = resp.get('scope', 'once')
+
+            if allowed:
+                if scope == 'always' and agent != 'codex':
+                    suggestions = payload.get('permission_suggestions', [])
+                    out = {
+                        'hookSpecificOutput': {
+                            'hookEventName': 'PermissionRequest',
+                            'decision': {
+                                'behavior': 'allow',
+                                'updatedPermissions': suggestions
+                            }
+                        }
+                    }
+                else:
+                    out = {
+                        'hookSpecificOutput': {
+                            'hookEventName': 'PermissionRequest',
+                            'decision': {'behavior': 'allow'}
+                        }
+                    }
+                if agent in ('copilot', 'muse'):
+                    out = {'permissionDecision': 'allow'}
+
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
+            else:
+                if agent in ('copilot', 'muse'):
+                    out = {'permissionDecision': 'deny'}
+                else:
+                    out = {
+                        'hookSpecificOutput': {
+                            'hookEventName': 'PermissionRequest',
+                            'decision': {
+                                'behavior': 'deny',
+                                'message': 'Denied from Agent Sentinel'
+                            }
+                        }
+                    }
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                # Non-zero or deny exit for Antigravity gating
+                if agent == 'antigravity':
+                    sys.exit(1)
+                sys.exit(0)
+
+        # Fallback if server is not reachable: fail-open or re-ask
+        sys.exit(0)
+
+    # For other events (SessionStart, PostToolUse, Stop, SessionEnd): notify Sentinel asynchronously
+    try:
+        notify_data = {
+            'event': event,
+            'agent': agent,
+            'sessionId': payload.get('session_id', ''),
+            'tool': payload.get('tool_name', ''),
+            'command': extract_command(payload)
+        }
+        send_via_socket(notify_data, socket_path, timeout=1)
+    except Exception:
+        pass
+
+    sys.exit(0)
+
+if __name__ == '__main__':
+    main()

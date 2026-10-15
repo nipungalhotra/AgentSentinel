@@ -1,44 +1,62 @@
 # 🛡️ Agent Sentinel
 
-> **A native macOS Menu Bar security daemon & permission sentinel featuring an expressive Liquid Glass permission card that drops down below the MacBook camera notch. Seamlessly integrates with Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, and your terminal.**
+> **A native macOS Menu Bar security daemon & permission sentinel featuring an expressive Liquid Glass permission card that drops down below the MacBook camera notch. Replicates the seamless hook, island, and pill architecture of [Coucou](https://github.com/Louis-CFM/coucou) for universal compatibility across Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, Copilot CLI, and your terminal.**
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B%20%7C%20Sequoia-black?logo=apple)
 ![Swift 6](https://img.shields.io/badge/Swift-6.0-orange?logo=swift)
-![MCP Compatible](https://img.shields.io/badge/MCP-Universal%20Standard-purple)
-![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20(arm64)-blue)
+![Architecture](https://img.shields.io/badge/Coucou--Parity-Island%20%2B%20Hooks-purple)
+![MCP Compatible](https://img.shields.io/badge/MCP-Universal%20Standard-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
 
-## 🌟 Universal AI Agent & Tool Support
+## 🌟 Universal AI Agent Compatibility (Coucou Parity)
 
-Agent Sentinel is designed from the ground up to protect your Mac across **all modern AI coding assistants and development workflows**:
+Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, Agent Sentinel implements a unified dual-transport hook engine (sub-millisecond Unix Domain Socket + HTTP) and declared Pill Catalog that gives every AI tool its own branded badge, theme colors, and native authorization flow:
 
-| Environment | Integration Mechanism | What it Guards |
-| :--- | :--- | :--- |
-| **🟣 Claude Code** | MCP Server (`sentinel-mcp`) / CLI wrapper | Bash tool commands, file writes, package installs |
-| **🟧 Cowork (Claude Desktop)** | Standard MCP (`claude_desktop_config.json`) | Agent file edits, terminal commands, tool executions |
-| **🔵 Antigravity & Antigravity IDE** | Native Antigravity MCP Server | Terminal actions, code generation, cloud deploys |
-| **🟩 Cursor & OpenAI Codex** | Cursor MCP (`~/.cursor/mcp.json`) / Python SDK | Agent execution, terminal runs, shell scripts |
-| **🤖 ChatGPT & Custom Agents** | Python (`sentinel.py`) & Node (`sentinel.js`) SDKs | Any custom agent tool loop or LLM chain |
-| **⚡ Terminal Shells (ZSH / Bash)** | Automatic `preexec` shell hook | Intercepts `rm -rf`, `sudo`, `git push --force` in any terminal |
-
----
-
-## ✨ Features
-
-- **Liquid Glass Notch Popup**: Drops down directly beneath the MacBook notch / camera with specular rim highlights, frosted glass blur, and fluid Apple spring animations.
-- **Expressive Face Orb**: An animated avatar that blinks, tracks cursor movement with spring physics, tilts brows in worry, wiggles with sparkle bursts on approval, and sleeps on timeout.
-- **Model Context Protocol (MCP)**: Native zero-dependency `sentinel-mcp` server supporting standard JSON-RPC 2.0 stdio communication.
-- **Hold to Confirm**: High-risk actions (`rm -rf`, `sudo`, irreversible file modifications) enforce a 1.0-second hold with a filling red progress bar.
-- **Flexible Scope Control**: Grant permission **Once**, for **10 minutes** (temporary grant with remaining countdown timer), or **Always** (saved to persistent whitelist rules).
-- **Comprehensive Dashboard**: Multi-tab SwiftUI dashboard with real-time status, test simulator, audit log with search & risk filters, active grants manager, and 1-click agent installer.
+| AI Assistant / Tool | Integration Channel | Config Path | What It Guards |
+| :--- | :--- | :--- | :--- |
+| **🟣 Claude Code** | Native `PermissionRequest` & `PreToolUse` Hooks | `~/.claude/settings.json` | Bash commands, file writes, package installs, `AskUserQuestion` |
+| **🟧 Cowork (Claude Desktop)** | Standard MCP Server (`sentinel-mcp`) | `~/Library/Application Support/Claude/claude_desktop_config.json` | Agent file edits, terminal commands, tool executions |
+| **🔵 Antigravity & IDE** | Native Hooks + MCP Schema | `~/.gemini/config/hooks.json` | Terminal executions, file modifications, cloud deployments |
+| **🟩 Cursor IDE** | Workspace MCP Server | `~/.cursor/mcp.json` | Autonomous agent execution, background runs, shell tasks |
+| **🔷 Codex CLI (OpenAI)** | Native `PermissionRequest` Hook | `~/.codex/hooks.json` | Python runners, dependency installs, shell commands |
+| **🤖 ChatGPT Desktop** | Codex Gateway & Python/Node SDKs | `sdk/sentinel.py` / `sdk/sentinel.js` | Custom LLM function calling, LangChain, OpenAI agent loops |
+| **🐙 Copilot CLI** | GitHub Copilot Hook System | `~/.copilot/hooks/sentinel.json` | Pull requests, merges, repository actions, CLI runs |
+| **⚡ Terminal Shells (ZSH/Bash)** | Preexec Auto-Gate Hook | `~/.zshrc` | Automatically intercepts `rm -rf`, `sudo`, `git push --force` |
 
 ---
 
-## 🚀 1-Click Setup for All AI Tools
+## ✨ Key Features
 
-Run this single command to automatically configure **Claude Code, Cowork, Antigravity, Cursor, and ZSH**:
+- **Physical Notch Hugging (`IslandPanel`)**: Anchored flush with the physical camera notch (`CGWindowLevelForKey(.mainMenuWindow) + 3`) using `constrainFrameRect` overrides so macOS never pushes the popup down into window space.
+- **Dual Transport IPC (`LocalIPCServer`)**:
+  - **Unix Domain Socket** (`~/Library/Application Support/AgentSentinel/sentinel.sock`): Sub-millisecond peer-verified IPC for instantaneous hook responses.
+  - **Local HTTP Server** (`http://127.0.0.1:9191`): REST endpoints (`/ask`, `/hook`, `/status`) with full CORS support.
+- **Universal Hook Script (`sentinel-hook`)**:
+  - Python 3 streaming CLI relay matching Coucou's `nb-hook`.
+  - Normalizes events across all agents (`BeforeTool` → `PreToolUse`, `permissionRequest` → `PermissionRequest`, `PreInvocation` → `UserPromptSubmit`).
+  - Blocks synchronously on `PermissionRequest` up to 120s and streams decision back in canonical JSON.
+- **Expressive Character Face & Audio (`SoundEngine`)**:
+  - Animated squircle face with dynamic states: idle, thinking, worried (on high-risk), pleased, sleepy.
+  - Interactive eye-tracking follows mouse cursor around the screen.
+  - Haptic feedback and native system chimes (popup chime, pop on allow, basso on deny).
+- **Hold-to-Confirm for High-Risk Actions**:
+  - Destructive commands (`rm -rf`, `sudo`, `kill -9`, `drop database`) require a 1.0-second hold with visual red progress.
+- **Flexible Scope Control**:
+  - **Allow Once**: One-time execution permit.
+  - **Allow 10 Min**: Temporary grant active across sessions with live countdown in the dashboard.
+  - **Always Allow**: Saved to persistent rules ledger (`rules.json`).
+- **Comprehensive Management Dashboard**:
+  - **Agent Integrations Hub**: 1-click installer and status monitor for all 8 agents.
+  - **Live Audit Log**: Searchable trail of every command evaluated, risk level, agent origin, and timestamp.
+  - **Rules & Grants Manager**: Delete, edit, or clear temporary permissions and persistent whitelist entries.
+
+---
+
+## 🚀 1-Click Installation (All AI Tools)
+
+Configure **Claude Code, Cowork, Antigravity, Cursor, Codex, Copilot, and ZSH** in a single command:
 
 ```bash
 sentinel install all
@@ -47,13 +65,17 @@ sentinel install all
 Output:
 ```
 🚀 Setting up Agent Sentinel across all AI agents and environments...
-🟣 Configuring Claude Code & Claude Desktop (Cowork)...
+🟣 Configuring Claude Code native hooks & Claude Desktop (Cowork)...
 ✓ Updated ~/Library/Application Support/Claude/claude_desktop_config.json
 ✓ Updated ~/.claude.json
-🟩 Configuring Cursor & Codex...
+✓ Registered Claude Code native hooks in ~/.claude/settings.json
+🟩 Configuring Cursor...
 ✓ Updated ~/.cursor/mcp.json
+🟩 Configuring Codex & ChatGPT hooks...
+✓ Updated ~/.codex/hooks.json
 🔵 Configuring Antigravity & Antigravity IDE...
-✓ Registered in ~/.gemini/antigravity-ide/mcp/sentinel
+✓ Registered Antigravity hooks in ~/.gemini/config/hooks.json
+✓ Registered MCP schema in ~/.gemini/antigravity-ide/mcp/sentinel
 ⚡ Installing ZSH Shell Auto-Gate Hook...
 ✓ Added Sentinel hook to ~/.zshrc
 🎉 All integrations installed successfully!
@@ -61,118 +83,80 @@ Output:
 
 ---
 
-## 💻 Manual Setup & Agent Integrations
+## 🧪 Testing the Live Notch Popup
 
-### 1. Claude Code
-Add the Sentinel MCP server to Claude Code:
+Test how different agents trigger the liquid glass popup right beneath your MacBook camera notch:
+
 ```bash
-claude mcp add sentinel -- sentinel mcp
+# Test Claude Code permission prompt
+sentinel test claude
+
+# Test Google Antigravity cloud deployment prompt
+sentinel test antigravity
+
+# Test Cursor force push prompt
+sentinel test cursor
+
+# Test OpenAI Codex dependency install prompt
+sentinel test codex
+
+# Test Cowork private key access prompt
+sentinel test cowork
 ```
 
-### 2. Cowork (Claude Desktop)
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "sentinel": {
-      "command": "node",
-      "args": ["/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-mcp.js"],
-      "env": { "SENTINEL_PORT": "9191" }
-    }
-  }
-}
+---
+
+## 🛠️ CLI Reference
+
+```bash
+# Intercept and guard any command in the shell
+sentinel run <command...>
+
+# Start the MCP server for Claude, Cursor, Antigravity, Cowork
+sentinel mcp
+
+# Inspect daemon health, active grants, and socket status
+sentinel status
+
+# Install hooks for a specific assistant
+sentinel install [claude|antigravity|codex|cursor|zsh|all]
 ```
 
-### 3. Cursor & Codex
-Add to `~/.cursor/mcp.json`:
-```json
-{
-  "mcpServers": {
-    "sentinel": {
-      "command": "node",
-      "args": ["/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-mcp.js"],
-      "env": { "SENTINEL_PORT": "9191" }
-    }
-  }
-}
-```
+---
 
-### 4. Custom Python Agents (ChatGPT, LangChain, Codex)
+## 🧩 SDK Usage (Custom Python & Node.js Agents)
+
+### Python SDK (`sdk/sentinel.py`)
 ```python
 from sentinel import ask_permission, guard
 
-# Ask user permission before performing a sensitive task
-if ask_permission("rm -rf ./build-cache", requested_by="ChatGPT", risk="high"):
-    print("User approved via Liquid Glass popup!")
+# Ask user authorization before critical action
+if ask_permission("rm -rf ./build", requested_by="ChatGPT", risk="high"):
+    print("User approved via notch popup! Running cleanup...")
 
-# Or guard execution automatically
-result = guard("npm run deploy", requested_by="Codex")
-print(result.stdout)
+# Or automatically guard command execution
+result = guard("git push origin main --force", requested_by="Codex")
 ```
 
-### 5. Custom Node.js / TypeScript Agents
+### Node.js SDK (`sdk/sentinel.js`)
 ```javascript
 const { askPermission } = require('./sentinel');
 
-async function execute() {
+async function run() {
   const allowed = await askPermission({
-    command: 'git push origin main --force',
+    command: 'npm publish --access public',
     requestedBy: 'Claude Code',
-    risk: 'high'
+    risk: 'medium'
   });
-
-  if (allowed) {
-    console.log("Permission granted!");
-  }
+  if (allowed) console.log("Published with user consent!");
 }
+run();
 ```
 
 ---
 
-## 🛠️ Build and Run from Source
+## 📜 Credits & Inspiration
 
-```bash
-# Clone the repository
-git clone https://github.com/nipungalhotra/AgentSentinel.git
-cd AgentSentinel
-
-# Build using Swift Package Manager
-swift build
-
-# Package into macOS .app bundle
-mkdir -p AgentSentinel.app/Contents/MacOS
-cp .build/debug/AgentSentinel AgentSentinel.app/Contents/MacOS/
-
-# Launch the app
-open AgentSentinel.app
-```
-
----
-
-## 📂 Project Structure
-
-```
-AgentSentinel/
-├── Package.swift               # Swift 6 Package definition
-├── Sources/
-│   ├── Main.swift              # App entry point & NSApplicationDelegate
-│   ├── Models.swift            # Risk, Scope, Decision, PermissionRequest, AuditLog
-│   ├── RulesEngine.swift       # Whitelist rules, 10-minute grants & persistence
-│   ├── LocalIPCServer.swift    # Network.framework HTTP daemon on port 9191
-│   ├── FaceAndCardViews.swift  # Liquid glass card, FaceView & notch window controller
-│   ├── SentinelManager.swift   # MenuBar coordinator & status item controller
-│   └── DashboardView.swift     # Multi-tab SwiftUI management & integrations hub
-├── bin/
-│   ├── sentinel                # Universal CLI router & 1-click installer
-│   └── sentinel-mcp.js         # Model Context Protocol (MCP) server
-├── sdk/
-│   ├── sentinel.py             # Python SDK for ChatGPT / Codex / LangChain
-│   └── sentinel.js             # Node.js SDK
-└── README.md
-```
-
----
-
-## 📜 License
-
-MIT License. Designed for macOS 14+ on Apple Silicon.
+- Built natively with **Swift 6, SwiftUI, and AppKit**.
+- Inspired by **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)** for the notch island architecture, hook lifecycle, and declared pill concepts.
+- Licensed under the **MIT License**.

@@ -518,13 +518,30 @@ struct PermissionCard: View {
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
+        let pill = PillCatalog.definition(for: model.request.requestedBy)
+        return HStack(spacing: 14) {
             orb
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(model.titleText)
-                    .font(.system(size: 17, weight: .semibold))
-                    .contentTransition(.opacity)
+                HStack(spacing: 6) {
+                    Text(model.titleText)
+                        .font(.system(size: 17, weight: .semibold))
+                        .contentTransition(.opacity)
+
+                    // Agent Brand Pill Badge
+                    HStack(spacing: 4) {
+                        Image(systemName: pill.iconSystemName)
+                            .font(.system(size: 10, weight: .bold))
+                        Text(pill.name)
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(pill.color.opacity(0.18), in: Capsule())
+                    .overlay(Capsule().strokeBorder(pill.color.opacity(0.4), lineWidth: 0.8))
+                    .foregroundStyle(pill.color)
+                }
+
                 HStack(spacing: 8) {
                     Text(model.subtitleText)
                         .font(.system(size: 13))
@@ -763,17 +780,22 @@ final class FloatingPanel: NSPanel {
                    backing: .buffered,
                    defer: false)
         isFloatingPanel = true
-        level = .statusBar
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 3)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// Allow panel to hug the notch and menu bar area without macOS forcing it down.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        return frameRect
+    }
 }
 
 @MainActor
@@ -812,7 +834,11 @@ final class PermissionPopupController {
             ?? NSScreen.main
             ?? NSScreen.screens[0]
 
-        let topY = screen.visibleFrame.maxY + Self.margin - 8
+        // Play subtle Coucou-style prompt sound
+        SoundEngine.shared.playPopup()
+
+        // Anchor top flush with the physical screen top / notch
+        let topY = screen.frame.maxY + Self.margin
         let initial = NSRect(x: screen.frame.midX - (384 / 2 + Self.margin),
                              y: topY - 340,
                              width: 384 + Self.margin * 2,
@@ -830,6 +856,11 @@ final class PermissionPopupController {
         panel.contentView = host
 
         model.onFinish = { [weak self] decision in
+            if decision.isAllowed {
+                SoundEngine.shared.playAllow()
+            } else {
+                SoundEngine.shared.playDeny()
+            }
             panel.orderOut(nil)
             self?.panel = nil
             completion(decision)
