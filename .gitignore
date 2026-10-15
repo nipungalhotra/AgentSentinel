@@ -6,3 +6,4 @@ xcuserdata/
 *.app
 DerivedData/
 __pycache__/
+dist/
