@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+
+# loggdin Universal CLI & Agent Dispatcher
+# Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, Copilot, and ZSH Shells.
+# Modeled after Coucou (https://github.com/Louis-CFM/coucou) architecture
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_PATH="/Applications/Loggdin.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="/Applications/AgentSentinel.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="$ROOT_DIR/Loggdin.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="$ROOT_DIR/AgentSentinel.app"
+
+MCP_SERVER="$ROOT_DIR/bin/sentinel-mcp.js"
+HOOK_SCRIPT="$HOME/Library/Application Support/AgentSentinel/sentinel-hook"
+PORT=9191
+
+ensure_daemon() {
+  if ! curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
+    echo "🛡️ Starting loggdin daemon..."
+    open "$APP_PATH"
+    for i in {1..12}; do
+      if curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
+        break
+      fi
+      sleep 0.25
+    done
+  fi
+}
+
+deploy_hook_script() {
+  mkdir -p "$HOME/Library/Application Support/AgentSentinel"
+  cp "$ROOT_DIR/bin/sentinel-hook" "$HOOK_SCRIPT"
+  chmod +x "$HOOK_SCRIPT"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$HOOK_SCRIPT" "$HOME/.local/bin/sentinel-hook"
+}
+
+cmd_status() {
+  STATUS=$(curl -s --connect-timeout 2 "http://127.0.0.1:$PORT/status" 2>&1)
+  if [ $? -eq 0 ]; then
+    echo "🛡️ loggdin Status: ONLINE"
+    echo "$STATUS"
+  else
+    echo "❌ loggdin Status: OFFLINE"
+    echo "Run 'open $APP_PATH' to start."
+  fi
+}
+
+cmd_mcp() {
+  ensure_daemon
+  node "$MCP_SERVER"
+}
+
+cmd_run() {
+  if [ -z "$1" ]; then
+    echo "Usage: loggdin run <command>"
+    exit 1
+  fi
+  ensure_daemon
+
+  COMMAND="$*"
+  PAYLOAD=$(python3 -c "
+import json, sys
+data = {
+    'command': sys.argv[1],
+    'title': 'Execute Command?',
+    'subtitle': 'Terminal • Shell Gate',
+    'risk': 'medium',
+    'requestedBy': 'Terminal',
+    'tool': 'Bash',
+    'symbol': 'terminal.fill',
+    'forcePrompt': True
+}
+print(json.dumps(data))
+" "$COMMAND")
+
+  RESPONSE=$(curl -s -X POST "http://127.0.0.1:$PORT/ask" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD")
+
+  ALLOWED=$(python3 -c "
+import json, sys
+try:
+    res = json.loads(sys.argv[1])
+    print(res.get('allowed', False))
+except Exception:
+    print(False)
+" "$RESPONSE")
+
+  if [ "$ALLOWED" = "True" ]; then
+    echo "✓ Permitted by loggdin. Executing: $COMMAND"
+    eval "$COMMAND"
+  else
+    echo "❌ Aborted by user in loggdin permission prompt."
+    exit 1
+  fi
+}
+
+cmd_test() {
+  ensure_daemon
+  AGENT="${1:-antigravity}"
+  echo "🧪 Triggering live liquid glass notch permission prompt for: $AGENT"
+  echo "   (Check beneath your MacBook notch or top of screen)"
+
+  case "$AGENT" in
+    antigravity)
+      CMD="docker compose up -d antigravity-core --build"
+      TITLE="Deploy Antigravity App Container?"
+      SUBTITLE="Antigravity IDE • Agent Deployer"
+      RISK="high"
+      SYM="sparkles"
+      ;;
+    claude)
+      CMD="rm -rf ./dist && npm run build"
+      TITLE="Clean Build Artifacts?"
+      SUBTITLE="Claude Code • Bash"
+      RISK="medium"
+      SYM="sparkles"
+      ;;
+    codex|chatgpt)
+      CMD="python3 -m pip install -r requirements.txt"
+      TITLE="Install Dependencies?"
+      SUBTITLE="Codex • PipInstaller"
+      RISK="low"
+      SYM="curlybraces"
+      ;;
+    cursor)
+      CMD="git push origin main --force"
+      TITLE="Force Push to Main Branch?"
+      SUBTITLE="Cursor • GitSync"
+      RISK="high"
+      SYM="chevron.left.forwardslash.chevron.right"
+      ;;
+    cowork)
+      CMD="cat ~/.ssh/id_rsa | base64"
+      TITLE="Read SSH Private Key?"
+      SUBTITLE="Cowork • KeyAccess"
+      RISK="high"
+      SYM="app.badge.checkmark"
+      ;;
+    *)
+      CMD="rm -rf /var/log/app && npm test"
+      TITLE="Execute Destructive Cleanup?"
+      SUBTITLE="Claude Code • Bash"
+      RISK="high"
+      SYM="terminal.fill"
+      ;;
+  esac
+
+  curl -s -X POST "http://127.0.0.1:$PORT/ask" \
+    -H "Content-Type: application/json" \
+    -d "{\"command\":\"$CMD\",\"title\":\"$TITLE\",\"subtitle\":\"$SUBTITLE\",\"risk\":\"$RISK\",\"requestedBy\":\"$AGENT\",\"symbol\":\"$SYM\",\"forcePrompt\":true}"
+  echo ""
+}
+
+# Main command router
+case "$1" in
+  mcp)
+    cmd_mcp
+    ;;
+  run)
+    shift
+    cmd_run "$@"
+    ;;
+  status)
+    cmd_status
+    ;;
+  test)
+    shift
+    cmd_test "$@"
+    ;;
+  install)
+    "$ROOT_DIR/bin/sentinel" install "$2"
+    ;;
+  help|--help|-h|"")
+    echo "loggdin Universal CLI (Coucou-parity)"
+    echo ""
+    echo "Usage:"
+    echo "  loggdin run <command>       Guards a command with the Liquid Glass notch popup"
+    echo "  loggdin test <agent>        Tests live notch popup (antigravity, claude, codex, cursor, cowork)"
+    echo "  loggdin mcp                 Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
+    echo "  loggdin status              Displays daemon status"
+    echo "  loggdin install <target>    Installs integration (antigravity, claude, cursor, codex, zsh, all)"
+    ;;
+  *)
+    cmd_run "$@"
+    ;;
+esac

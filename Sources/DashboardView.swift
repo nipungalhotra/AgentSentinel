@@ -54,7 +54,7 @@ struct DashboardView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Agent Sentinel")
+                        Text("loggdin")
                             .font(.system(size: 14, weight: .bold))
                         HStack(spacing: 6) {
                             Text("PERMISSION GATE")
@@ -244,7 +244,7 @@ struct DashboardView: View {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
-                                Text("Agent Sentinel")
+                                Text("loggdin")
                                     .font(.system(size: 12))
                                     .foregroundStyle(.secondary)
                                 Text("/")

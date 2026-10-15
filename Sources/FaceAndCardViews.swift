@@ -938,7 +938,8 @@ final class FloatingPanel: NSPanel {
                    backing: .buffered,
                    defer: false)
         isFloatingPanel = true
-        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 3)
+        // ScreenSaver level (1000) guarantees floating above full-screen apps, browsers, and terminal windows
+        level = .screenSaver
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -988,9 +989,12 @@ final class PermissionPopupController {
 
     private func present(_ request: PermissionRequest, completion: @escaping (Decision) -> Void) {
         let model = PermissionModel(request: request)
-        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
-            ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+        
+        // Prioritize the screen the user is actively working on (mouse cursor location)
+        let mouseLoc = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouseLoc, $0.frame, false) }
             ?? NSScreen.main
+            ?? NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
             ?? NSScreen.screens[0]
 
         let geometry = IslandScreenGeometry(screen: screen)
@@ -1019,9 +1023,16 @@ final class PermissionPopupController {
         }
 
         self.panel = panel
+        
+        // Ensure panel is on top of all windows without needing to switch apps
+        panel.level = .screenSaver
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
+        
+        // Modern macOS 14+ activation without requiring dock click
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
         NSApp.activate(ignoringOtherApps: true)
+        
         model.start()
     }
 }

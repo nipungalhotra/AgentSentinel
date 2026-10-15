@@ -2,16 +2,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "AgentSentinel",
+    name: "loggdin",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "AgentSentinel", targets: ["AgentSentinel"])
+        .executable(name: "loggdin", targets: ["loggdin"])
     ],
     targets: [
         .executableTarget(
-            name: "AgentSentinel",
+            name: "loggdin",
             path: "Sources"
         )
     ]

@@ -68,7 +68,7 @@ public final class StartupManager: @unchecked Sendable {
             let entry = """
             [Desktop Entry]
             Type=Application
-            Name=Agent Sentinel
+            Name=loggdin
             Comment=Universal Permission Gate for AI Coding Agents
             Exec=sentinel daemon
             Terminal=false

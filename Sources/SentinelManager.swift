@@ -79,7 +79,7 @@ final class SentinelManager: NSObject {
 
         let menu = NSMenu()
 
-        let headerItem = NSMenuItem(title: "Agent Sentinel (Port 9191)", action: nil, keyEquivalent: "")
+        let headerItem = NSMenuItem(title: "loggdin (Port 9191)", action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
@@ -114,7 +114,7 @@ final class SentinelManager: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "Quit Agent Sentinel", action: #selector(quitAction), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit loggdin", action: #selector(quitAction), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -172,7 +172,7 @@ final class SentinelManager: NSObject {
             defer: false
         )
         window.center()
-        window.title = "Agent Sentinel Dashboard"
+        window.title = "loggdin Dashboard"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.contentView = NSHostingView(rootView: DashboardView())

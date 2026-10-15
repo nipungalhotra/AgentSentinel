@@ -3,7 +3,8 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        // Set accessory policy so macOS allows floating overlays from background without app-switching
+        NSApp.setActivationPolicy(.accessory)
         SentinelManager.shared.startup()
         
         // Open the dashboard and trigger a sample popup on first launch
