@@ -357,8 +357,8 @@ final class PermissionModel {
             popTrigger += 1
             face = baseFace
 
-            // Seamless Touch ID: activate sensor automatically on appearance
-            if BiometricAuthManager.shared.isBiometricAvailable {
+            // Seamless Touch ID: activate sensor automatically on appearance ONLY for high-risk commands
+            if isHigh && BiometricAuthManager.shared.isBiometricAvailable {
                 authenticateWithTouchID()
             }
 
@@ -395,10 +395,10 @@ final class PermissionModel {
         withAnimation(.easeOut(duration: 0.4)) { ringRemaining = 1 }
 
         runner = Task { [weak self] in
-            guard await Self.pause(2.0) else { return }
+            guard await Self.pause(0.6) else { return }
             guard let self else { return }
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { appeared = false }
-            guard await Self.pause(0.55) else { return }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { appeared = false }
+            guard await Self.pause(0.35) else { return }
             onFinish?(decision)
         }
     }
@@ -436,11 +436,11 @@ final class PermissionModel {
     }
 
     func authenticateWithTouchID() {
-        guard isAsking else { return }
+        guard isAsking, isHigh else { return }
         Task { [weak self] in
             guard let self else { return }
             let success = await BiometricAuthManager.shared.authenticate(
-                reason: "Authorize \(request.title)"
+                reason: "Authorize high-risk action: \(request.plainCommand)"
             )
             if success && isAsking {
                 SoundEngine.shared.playAllow()
@@ -777,27 +777,47 @@ struct PermissionCard: View {
             .buttonBorderShape(.capsule)
             .onHover { model.hovering(.deny, $0) }
 
-            Button {
-                model.decide(.allow(model.scope))
-            } label: {
-                HStack(spacing: 7) {
-                    if BiometricAuthManager.shared.isBiometricAvailable {
-                        Image(systemName: "touchid")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(model.isHigh ? Color.orange : Color.green)
+            if model.isHigh {
+                if BiometricAuthManager.shared.isBiometricAvailable {
+                    Button {
+                        model.authenticateWithTouchID()
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "touchid")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.orange)
+                            Text("Touch ID to Allow")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
                     }
-                    Text(model.scope.allowLabel)
-                        .font(.system(size: 14, weight: .semibold))
-                    KeyHint("\u{21A9}")
+                    .keyboardShortcut(.defaultAction)
+                    .glassButton(prominent: true)
+                    .buttonBorderShape(.capsule)
+                    .tint(.orange)
+                    .onHover { model.hovering(.allow, $0) }
+                } else {
+                    HoldToConfirmButton(model: model, title: "Hold to allow")
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 38)
+            } else {
+                Button {
+                    model.decide(.allow(model.scope))
+                } label: {
+                    HStack(spacing: 7) {
+                        Text(model.scope.allowLabel)
+                            .font(.system(size: 14, weight: .semibold))
+                        KeyHint("\u{21A9}")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+                }
+                .keyboardShortcut(.defaultAction)
+                .glassButton(prominent: true)
+                .buttonBorderShape(.capsule)
+                .tint(.blue)
+                .onHover { model.hovering(.allow, $0) }
             }
-            .keyboardShortcut(.defaultAction)
-            .glassButton(prominent: true)
-            .buttonBorderShape(.capsule)
-            .tint(model.isHigh ? .orange : .blue)
-            .onHover { model.hovering(.allow, $0) }
         }
     }
 }
