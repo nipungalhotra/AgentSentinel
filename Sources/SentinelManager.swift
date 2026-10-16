@@ -79,29 +79,63 @@ final class SentinelManager: NSObject {
 
         let menu = NSMenu()
 
-        let headerItem = NSMenuItem(title: "loggdin (Port 9191)", action: nil, keyEquivalent: "")
+        let headerItem = NSMenuItem(title: "loggdin • Agent Sentinel", action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
         menu.addItem(headerItem)
 
-        let statusTextItem = NSMenuItem(title: "Status: Guarding", action: nil, keyEquivalent: "")
-        statusTextItem.isEnabled = false
-        menu.addItem(statusTextItem)
+        if pendingCount > 0 {
+            let needsYouItem = NSMenuItem(title: "⚠️ Needs you (\(pendingCount) pending)", action: #selector(openDashboardAction), keyEquivalent: "")
+            needsYouItem.target = self
+            menu.addItem(needsYouItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
-        let dashboardItem = NSMenuItem(title: "Open Dashboard & Rules...", action: #selector(openDashboardAction), keyEquivalent: "d")
+        let agentsHeader = NSMenuItem(title: "CONNECTED AGENTS", action: nil, keyEquivalent: "")
+        agentsHeader.isEnabled = false
+        menu.addItem(agentsHeader)
+
+        let claudeItem = NSMenuItem(title: "● Claude Code (Active)", action: nil, keyEquivalent: "")
+        claudeItem.isEnabled = false
+        menu.addItem(claudeItem)
+
+        let antigravityItem = NSMenuItem(title: "● Antigravity (Gated)", action: nil, keyEquivalent: "")
+        antigravityItem.isEnabled = false
+        menu.addItem(antigravityItem)
+
+        let cursorItem = NSMenuItem(title: "● Cursor (Idle)", action: nil, keyEquivalent: "")
+        cursorItem.isEnabled = false
+        menu.addItem(cursorItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let prefsHeader = NSMenuItem(title: "PREFERENCES", action: nil, keyEquivalent: "")
+        prefsHeader.isEnabled = false
+        menu.addItem(prefsHeader)
+
+        let newFaceItem = NSMenuItem(title: "✓ New face every time", action: nil, keyEquivalent: "")
+        newFaceItem.isEnabled = false
+        menu.addItem(newFaceItem)
+
+        let floatingDockItem = NSMenuItem(title: "  Floating dock (off)", action: nil, keyEquivalent: "")
+        floatingDockItem.isEnabled = false
+        menu.addItem(floatingDockItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let dashboardItem = NSMenuItem(title: "Open Sessions Hub & Rules...", action: #selector(openDashboardAction), keyEquivalent: "d")
         dashboardItem.target = self
         menu.addItem(dashboardItem)
 
-        // Submenu: Simulate Requests
+        // Submenu: Simulate Requests by Category (Faces by Need)
         let simMenu = NSMenu()
         for (i, sample) in PermissionRequest.samples.enumerated() {
-            let item = NSMenuItem(title: "\(sample.title) (\(sample.risk.label))", action: #selector(simulateAction(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: "\(sample.category.label): \(sample.title)", action: #selector(simulateAction(_:)), keyEquivalent: "")
             item.tag = i
             item.target = self
             simMenu.addItem(item)
         }
-        let simParent = NSMenuItem(title: "Test Popup Simulator", action: nil, keyEquivalent: "")
+        let simParent = NSMenuItem(title: "Test Faces by Need Simulator", action: nil, keyEquivalent: "")
         simParent.submenu = simMenu
         menu.addItem(simParent)
 
@@ -124,11 +158,14 @@ final class SentinelManager: NSObject {
     private func updateMenuBarIcon() {
         guard let button = statusItem?.button else { return }
         if pendingCount > 0 {
-            button.title = "🛡️ 🔔"
+            button.image = NSImage(systemSymbolName: "face.smiling.fill", accessibilityDescription: "loggdin - Needs you")
+            button.title = " 🔔"
         } else if isProtectionEnabled {
-            button.title = "🛡️"
+            button.image = NSImage(systemSymbolName: "face.smiling", accessibilityDescription: "loggdin")
+            button.title = ""
         } else {
-            button.title = "🛡️ ⏸️"
+            button.image = NSImage(systemSymbolName: "face.dashed", accessibilityDescription: "loggdin - Paused")
+            button.title = ""
         }
     }
 

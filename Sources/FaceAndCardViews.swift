@@ -90,6 +90,7 @@ struct MouthShape: Shape {
 struct FaceView: View {
     var state: FaceState
     var look: CGSize
+    var customColor: Color? = nil
 
     @State private var blink = false
     @State private var zFloat = false
@@ -97,7 +98,7 @@ struct FaceView: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(state.color)
+            Circle().fill(customColor ?? state.color)
             Circle().strokeBorder(.white.opacity(0.4), lineWidth: 0.8)
 
             Ellipse()
@@ -337,6 +338,16 @@ final class PermissionModel {
         }
     }
 
+    var categoryColor: Color {
+        switch request.category {
+        case .readFile: return Color(red: 0.063, green: 0.725, blue: 0.506)
+        case .network: return Color(red: 0.008, green: 0.518, blue: 0.780)
+        case .command: return Color(red: 0.961, green: 0.620, blue: 0.043)
+        case .delete: return Color(red: 0.937, green: 0.267, blue: 0.267)
+        case .question: return Color(red: 0.545, green: 0.361, blue: 0.965)
+        }
+    }
+
     var ringColor: Color {
         switch phase {
         case .resolved(.allow): return .green
@@ -344,7 +355,7 @@ final class PermissionModel {
         case .resolved(.timeout): return .gray
         case .asking:
             if warn { return .orange }
-            return isHigh ? .red : Color(red: 0.851, green: 0.467, blue: 0.341)
+            return categoryColor
         }
     }
 
@@ -654,7 +665,7 @@ struct PermissionCard: View {
                 .rotationEffect(.degrees(-90))
                 .animation(.easeInOut(duration: 0.3), value: model.ringColor)
 
-            FaceView(state: model.face, look: look)
+            FaceView(state: model.face, look: look, customColor: model.categoryColor)
                 .faceEffects(pop: model.popTrigger, wiggle: model.wiggleTrigger, shake: model.shakeTrigger)
 
             if let id = model.burstID {

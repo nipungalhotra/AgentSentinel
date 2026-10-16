@@ -229,24 +229,63 @@ struct PermissionRequest: Identifiable, Codable {
         self.modifiesFiles = modifiesFiles
     }
 
+    var category: PermissionCategory {
+        let cmd = plainCommand.lowercased()
+        if cmd.contains("rm ") || cmd.contains("delete") || cmd.contains("drop") || risk == .high {
+            return .delete
+        }
+        if cmd.contains("cat ") || cmd.contains("read") || cmd.contains("head ") || symbol == "doc" {
+            return .readFile
+        }
+        if cmd.contains("curl") || cmd.contains("http") || cmd.contains("fetch") || cmd.contains("wget") || symbol == "globe" {
+            return .network
+        }
+        if cmd.contains("choose") || cmd.contains("confirm") || cmd.contains("ask") {
+            return .question
+        }
+        return .command
+    }
+
     static let samples: [PermissionRequest] = [
+        PermissionRequest(
+            title: "Read this file?", subtitle: "File access", symbol: "doc",
+            tokens: [CommandToken("read", .command), CommandToken("~/Documents/financial_summary.pdf", .argument)],
+            risk: .low, requestedBy: "Claude Code", directory: "~/Documents", modifiesFiles: "No"),
+        PermissionRequest(
+            title: "Connect to this host?", subtitle: "Network access", symbol: "globe",
+            tokens: [CommandToken("GET", .command), CommandToken("api.example.com/v1/users", .argument)],
+            risk: .low, requestedBy: "Antigravity", directory: "~/Projects/my-app", modifiesFiles: "No"),
         PermissionRequest(
             title: "Run this command?", subtitle: "Terminal access", symbol: "terminal",
             tokens: [CommandToken("npm", .command), CommandToken("install"), CommandToken("express", .argument)],
             risk: .medium, requestedBy: "Claude Code", directory: "~/Projects/my-app", modifiesFiles: "Yes"),
         PermissionRequest(
-            title: "Read this file?", subtitle: "File access", symbol: "doc",
-            tokens: [CommandToken("read", .command), CommandToken("~/Documents/report.pdf", .argument)],
-            risk: .low, requestedBy: "Claude Code", directory: "~/Documents", modifiesFiles: "No"),
-        PermissionRequest(
-            title: "Connect to this host?", subtitle: "Network access", symbol: "globe",
-            tokens: [CommandToken("GET", .command), CommandToken("api.example.com/v1/users", .argument)],
-            risk: .low, requestedBy: "Claude Code", directory: "~/Projects/my-app", modifiesFiles: "No"),
-        PermissionRequest(
             title: "Delete these files?", subtitle: "File system", symbol: "trash",
             tokens: [CommandToken("rm", .command), CommandToken("-rf", .danger), CommandToken("~/Projects/old-build", .argument)],
-            risk: .high, requestedBy: "Claude Code", directory: "~/Projects", modifiesFiles: "Yes, permanently")
+            risk: .high, requestedBy: "Claude Code", directory: "~/Projects", modifiesFiles: "Yes, permanently"),
+        PermissionRequest(
+            title: "Clarify architectural choice?", subtitle: "Interactive prompt", symbol: "sparkles",
+            tokens: [CommandToken("choose", .command), CommandToken("--database"), CommandToken("PostgreSQL", .argument)],
+            risk: .low, requestedBy: "Antigravity", directory: "~/workspace", modifiesFiles: "No")
     ]
+}
+
+enum PermissionCategory: String, Codable, CaseIterable {
+    case readFile = "read"
+    case network = "network"
+    case command = "command"
+    case delete = "delete"
+    case question = "question"
+
+    var label: String {
+        switch self {
+        case .readFile: return "Read file"
+        case .network: return "Network"
+        case .command: return "Command"
+        case .delete: return "Delete"
+        case .question: return "Question"
+        }
+    }
 }
 
 // MARK: - Stored Rules & Grants
