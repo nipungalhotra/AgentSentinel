@@ -388,7 +388,7 @@ final class PermissionModel {
     func decide(_ decision: Decision) {
         guard isAsking else { return }
         runner?.cancel()
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) { phase = .resolved(decision) }
+        phase = .resolved(decision)
 
         switch decision {
         case .allow:
@@ -403,14 +403,27 @@ final class PermissionModel {
             face = .sleepy
             popTrigger += 1
         }
-        withAnimation(.easeOut(duration: 0.4)) { ringRemaining = 1 }
+        withAnimation(.easeOut(duration: 0.2)) { ringRemaining = 1 }
+
+        let finish = self.onFinish
+        self.onFinish = nil
 
         runner = Task { [weak self] in
-            guard await Self.pause(0.6) else { return }
-            guard let self else { return }
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { appeared = false }
-            guard await Self.pause(0.35) else { return }
-            onFinish?(decision)
+            // Fast 150ms visual acknowledgment before closing
+            guard await Self.pause(0.15) else {
+                finish?(decision)
+                return
+            }
+            guard let self else {
+                finish?(decision)
+                return
+            }
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { self.appeared = false }
+            guard await Self.pause(0.1) else {
+                finish?(decision)
+                return
+            }
+            finish?(decision)
         }
     }
 
@@ -1063,7 +1076,10 @@ final class PermissionPopupController {
     private var activeModel: PermissionModel?
 
     func currentPendingRequest() -> PermissionRequest? {
-        return activeRequest ?? queue.first?.request
+        if let model = activeModel, model.isAsking {
+            return model.request
+        }
+        return queue.first?.request
     }
 
     @discardableResult
@@ -1073,6 +1089,7 @@ final class PermissionPopupController {
                model.request.id.uuidString.caseInsensitiveCompare(reqId) != .orderedSame {
                 return false
             }
+            self.activeRequest = nil
             model.decide(decision)
             return true
         }
@@ -1083,6 +1100,7 @@ final class PermissionPopupController {
                 queue.insert(first, at: 0)
                 return false
             }
+            self.activeRequest = nil
             for c in first.continuations {
                 c.resume(returning: decision)
             }
@@ -1191,6 +1209,9 @@ final class PermissionPopupController {
             }
             panel.orderOut(nil)
             self?.panel = nil
+            self?.activeRequest = nil
+            self?.activeModel = nil
+            self?.activeCommand = nil
 
             // Seamlessly restore keyboard focus back to the user's active editor/terminal
             if let prev = self?.previousFrontmostApp {

@@ -61,8 +61,8 @@ final class SentinelManager: NSObject {
             )
         }
 
-        // 1. Check rules and active grants (bypassed if forcePrompt is true or jail violation)
-        if !forcePrompt && activeRequest.risk != .high, let autoDecision = rulesEngine.evaluate(request: activeRequest) {
+        // 1. Check rules and active grants (Catastrophic commands like rm -rf / are guarded in RulesEngine)
+        if !forcePrompt, let autoDecision = rulesEngine.evaluate(request: activeRequest) {
             lastDecisionSummary = "Auto-\(autoDecision.summary): \(activeRequest.plainCommand)"
             WebhookManager.shared.notifyDecision(activeRequest, decision: autoDecision)
             return autoDecision
