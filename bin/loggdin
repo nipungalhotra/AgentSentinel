@@ -156,19 +156,74 @@ cmd_test() {
 cmd_pending() {
   ensure_daemon
   PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  if [ "${1:-}" = "--json" ] || [ "${1:-}" = "-j" ]; then
+    echo "$PENDING"
+    return
+  fi
   python3 -c "
 import sys, json
 try:
     d = json.loads(sys.argv[1])
     if d.get('hasPending'):
-        print(f\"⚠️  Pending Permission Request ({d.get('id')})\")
-        print(f\"   Agent:   {d.get('requestedBy')} ({d.get('tool')})\")
-        print(f\"   Risk:    {d.get('risk')}\")
-        print(f\"   Action:  {d.get('command')}\")
+        print(f\"⚠️  Pending Permission Request\")
+        print(f\"🤖 Agent:   {d.get('requestedBy')}\")
+        print(f\"⚠️  Risk:    {d.get('risk', '').upper()}\")
+        print(f\"💻 Action:  {d.get('command')}\")
     else:
         print(\"✓ No permissions currently pending.\")
 except Exception as e:
     print(sys.argv[1])
+" "$PENDING"
+}
+
+cmd_review() {
+  ensure_daemon
+  PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  python3 -c "
+import sys, json, os, subprocess
+
+try:
+    d = json.loads(sys.argv[1])
+    if not d.get('hasPending'):
+        print('✓ No permissions currently pending on your Mac.')
+        sys.exit(0)
+    
+    print('========================================')
+    print('🛡️  loggdin Remote Permission Review')
+    print('========================================')
+    print(f\"🤖 Agent:   {d.get('requestedBy')} ({d.get('subtitle', '')})\")
+    print(f\"⚠️  Risk:    {d.get('risk', '').upper()}\")
+    print(f\"💻 Action:  {d.get('command')}\")
+    print('========================================')
+    print('Select action:')
+    print('  1) Allow for 10 minutes (Recommended)')
+    print('  2) Allow once')
+    print('  3) Deny')
+    print('  q) Quit without deciding')
+    print('----------------------------------------')
+    
+    choice = input('Choice [1/2/3/q]: ').strip().lower()
+    port = '9191'
+    
+    if choice == '1':
+        subprocess.run(['curl', '-s', '-X', 'POST', f'http://127.0.0.1:{port}/decision', 
+                       '-H', 'Content-Type: application/json', 
+                       '-d', '{\"decision\":\"allow\",\"scope\":\"10m\"}'])
+        print('✅ Approved for 10 minutes.')
+    elif choice == '2':
+        subprocess.run(['curl', '-s', '-X', 'POST', f'http://127.0.0.1:{port}/decision', 
+                       '-H', 'Content-Type: application/json', 
+                       '-d', '{\"decision\":\"allow\",\"scope\":\"once\"}'])
+        print('✅ Approved once.')
+    elif choice == '3':
+        subprocess.run(['curl', '-s', '-X', 'POST', f'http://127.0.0.1:{port}/decision', 
+                       '-H', 'Content-Type: application/json', 
+                       '-d', '{\"decision\":\"deny\"}'])
+        print('❌ Denied permission.')
+    else:
+        print('Cancelled.')
+except Exception as e:
+    print(f'Error: {e}')
 " "$PENDING"
 }
 
@@ -218,7 +273,11 @@ case "$1" in
     cmd_run "$@"
     ;;
   pending)
-    cmd_pending
+    shift
+    cmd_pending "$@"
+    ;;
+  review)
+    cmd_review
     ;;
   allow)
     shift
