@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import CryptoKit
 
 // MARK: - Risk Levels
 
@@ -370,6 +371,47 @@ struct AuditLogEntry: Identifiable, Codable {
     let request: PermissionRequest
     let decision: Decision
     let autoAllowed: Bool
+    var prevHash: String? = nil
+    var entryHash: String? = nil
+
+    init(
+        id: UUID = UUID(),
+        timestamp: Date = Date(),
+        request: PermissionRequest,
+        decision: Decision,
+        autoAllowed: Bool,
+        prevHash: String? = nil,
+        entryHash: String? = nil
+    ) {
+        self.id = id
+        self.timestamp = timestamp
+        self.request = request
+        self.decision = decision
+        self.autoAllowed = autoAllowed
+        self.prevHash = prevHash
+        self.entryHash = entryHash
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, request, decision, autoAllowed, prevHash, entryHash
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.timestamp = try c.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        self.request = try c.decode(PermissionRequest.self, forKey: .request)
+        self.decision = try c.decode(Decision.self, forKey: .decision)
+        self.autoAllowed = try c.decodeIfPresent(Bool.self, forKey: .autoAllowed) ?? false
+        self.prevHash = try c.decodeIfPresent(String.self, forKey: .prevHash)
+        self.entryHash = try c.decodeIfPresent(String.self, forKey: .entryHash)
+    }
+
+    func computeHash(prev: String) -> String {
+        let payload = "\(prev)|\(Int(timestamp.timeIntervalSince1970))|\(request.plainCommand)|\(request.requestedBy)|\(request.directory)|\(request.risk.rawValue)|\(decision.summary)|\(autoAllowed)"
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 
     var timeFormatted: String {
         let formatter = DateFormatter()

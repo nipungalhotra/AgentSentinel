@@ -1168,6 +1168,9 @@ struct AuditLogTab: View {
     @State private var search: String = ""
     @State private var filterRisk: Risk? = nil
     @State private var copiedLogId: UUID? = nil
+    @State private var copiedHashId: UUID? = nil
+    @State private var showingIntegritySheet: Bool = false
+    @State private var exportStatusMessage: String? = nil
 
     var filteredLogs: [AuditLogEntry] {
         rules.auditLogs.filter { log in
@@ -1223,6 +1226,87 @@ struct AuditLogTab: View {
             }
             .padding(16)
             .background(.ultraThinMaterial.opacity(0.9))
+
+            // Cryptographic Merkle Chain Status & Export Subheader
+            let integrity = rules.verifyChainIntegrity()
+            HStack(spacing: 12) {
+                Button {
+                    showingIntegritySheet.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: integrity.isValid ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(integrity.isValid ? "Merkle Chain Verified (\(integrity.totalEntries))" : "Chain Alert: Tamper Detected")
+                            .font(.system(size: 11, weight: .semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .opacity(0.6)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4.5)
+                    .background(integrity.isValid ? Color.green.opacity(0.15) : Color.red.opacity(0.18), in: Capsule())
+                    .foregroundStyle(integrity.isValid ? Color.green : Color.red)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showingIntegritySheet) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "lock.shield.fill")
+                                .foregroundStyle(.blue)
+                            Text("Cryptographic Audit Ledger")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        Divider()
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Algorithm: SHA-256 Merkle Chaining")
+                                .font(.system(size: 11, design: .monospaced))
+                            Text("Genesis Root: \(RulesEngine.genesisHash.prefix(16))...")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            if let latest = rules.auditLogs.first?.entryHash {
+                                Text("Latest Digest: \(latest.prefix(16))...")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(integrity.message)
+                                .font(.system(size: 11))
+                                .foregroundStyle(integrity.isValid ? Color.green : Color.red)
+                                .padding(.top, 4)
+                        }
+                    }
+                    .padding(14)
+                    .frame(width: 330)
+                }
+
+                Spacer()
+
+                if let exportStatusMessage {
+                    Text(exportStatusMessage)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.green)
+                }
+
+                Button {
+                    exportCSV()
+                } label: {
+                    Label("Export CSV", systemImage: "arrow.down.doc")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .disabled(rules.auditLogs.isEmpty)
+                .controlSize(.small)
+
+                Button {
+                    exportJSON()
+                } label: {
+                    Label("Export JSON", systemImage: "arrow.down.doc.fill")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .disabled(rules.auditLogs.isEmpty)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.025))
 
             Divider().opacity(0.4)
 
@@ -1304,11 +1388,80 @@ struct AuditLogTab: View {
                         HStack(spacing: 16) {
                             Text("Dir: \(entry.request.directory)").foregroundStyle(.secondary)
                             Text("Modifies: \(entry.request.modifiesFiles)").foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            if let hash = entry.entryHash {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "link")
+                                        .font(.system(size: 8.5))
+                                        .foregroundStyle(.secondary)
+                                    Text("Hash: \(hash.prefix(8))...")
+                                        .font(.system(size: 9.5, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+
+                                    Button {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(hash, forType: .string)
+                                        copiedHashId = entry.id
+                                        SoundEngine.shared.playTick()
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                            if copiedHashId == entry.id {
+                                                copiedHashId = nil
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: copiedHashId == entry.id ? "checkmark" : "doc.on.doc")
+                                            .font(.system(size: 8.5))
+                                            .foregroundStyle(copiedHashId == entry.id ? Color.green : Color.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            }
                         }
                         .font(.system(size: 11))
                     }
                     .padding(.vertical, 6)
                 }
+            }
+        }
+    }
+
+    private func exportCSV() {
+        let content = rules.exportAuditLogCSV()
+        saveExport(content: content, filename: "loggdin_audit_\(dateStamp()).csv")
+    }
+
+    private func exportJSON() {
+        let content = rules.exportAuditLogJSON()
+        saveExport(content: content, filename: "loggdin_audit_\(dateStamp()).json")
+    }
+
+    private func dateStamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd_HHmmss"
+        return f.string(from: Date())
+    }
+
+    private func saveExport(content: String, filename: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
+
+        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            let target = downloads.appendingPathComponent(filename)
+            try? content.data(using: .utf8)?.write(to: target)
+        }
+
+        SoundEngine.shared.playAllow()
+        withAnimation {
+            exportStatusMessage = "Saved to Downloads & Clipboard!"
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation {
+                exportStatusMessage = nil
             }
         }
     }
@@ -1338,6 +1491,7 @@ struct AuditLogTab: View {
 struct RulesTab: View {
     @State private var rules = RulesEngine.shared
     @State private var newRulePattern: String = ""
+    @State private var testResult: String? = nil
 
     var body: some View {
         ScrollView {
@@ -1471,8 +1625,72 @@ struct RulesTab: View {
                 .padding(20)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
+
+                // Remote Webhook Alerts Relay
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text("Remote Webhook Relay (Slack / Discord)")
+                                .font(.system(size: 16, weight: .bold))
+                            Spacer()
+                            if WebhookManager.shared.isConfigured {
+                                HStack(spacing: 5) {
+                                    Circle().fill(Color.green).frame(width: 7, height: 7)
+                                    Text("Active")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(.green)
+                                }
+                            } else {
+                                HStack(spacing: 5) {
+                                    Circle().fill(Color.secondary).frame(width: 7, height: 7)
+                                    Text("Inactive")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        Text("Dispatches instant push alerts to team channels when agents request high-risk operations or violate workspace jail boundaries.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("Send Test Alert") {
+                            Task {
+                                let (success, msg) = await WebhookManager.shared.testWebhook()
+                                testResult = msg
+                                if success {
+                                    SoundEngine.shared.playAllow()
+                                } else {
+                                    SoundEngine.shared.playDeny()
+                                }
+                            }
+                        }
+                        .controlSize(.small)
+
+                        Button("Open Webhook Config") {
+                            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                            let path = appSupport.appendingPathComponent("AgentSentinel/webhook.json").path
+                            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
+                        }
+                        .controlSize(.small)
+
+                        Spacer()
+
+                        if let testResult {
+                            Text(testResult)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(testResult.contains("HTTP 2") ? .green : .orange)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
             }
             .padding(24)
         }
     }
 }
+

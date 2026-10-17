@@ -64,6 +64,7 @@ final class SentinelManager: NSObject {
         // 1. Check rules and active grants (bypassed if forcePrompt is true or jail violation)
         if !forcePrompt && activeRequest.risk != .high, let autoDecision = rulesEngine.evaluate(request: activeRequest) {
             lastDecisionSummary = "Auto-\(autoDecision.summary): \(activeRequest.plainCommand)"
+            WebhookManager.shared.notifyDecision(activeRequest, decision: autoDecision)
             return autoDecision
         }
 
@@ -72,9 +73,11 @@ final class SentinelManager: NSObject {
         updateMenuBar()
 
         deliverSystemNotification(for: activeRequest)
+        WebhookManager.shared.notifyPending(activeRequest)
 
         let decision = await PermissionPopupController.shared.ask(activeRequest)
         rulesEngine.recordDecision(request: activeRequest, decision: decision, autoAllowed: false)
+        WebhookManager.shared.notifyDecision(activeRequest, decision: decision)
 
         // Production Feature: Time Machine File Snapshot before modifications
         if decision.isAllowed {

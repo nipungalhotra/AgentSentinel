@@ -41,6 +41,7 @@ final class SnapshotManager {
         snapshots.first
     }
 
+    @discardableResult
     func createSnapshot(for originalPath: String, agent: String = "Agent") -> SnapshotEntry? {
         guard fileManager.fileExists(atPath: originalPath) else { return nil }
 

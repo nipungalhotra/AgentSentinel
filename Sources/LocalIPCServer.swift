@@ -134,6 +134,33 @@ final class LocalIPCServer {
             return
         }
 
+        if method == "GET" && path == "/audit/verify" {
+            let res = RulesEngine.shared.verifyChainIntegrity()
+            let brokenStr = res.brokenIndex != nil ? "\(res.brokenIndex!)" : "null"
+            let json = """
+            {
+                "isValid": \(res.isValid),
+                "totalEntries": \(res.totalEntries),
+                "brokenIndex": \(brokenStr),
+                "algorithm": "SHA-256 Merkle Chain",
+                "message": "\(res.message)"
+            }
+            """
+            sendHTTPResponse(connection: connection, status: "200 OK", json: json)
+            return
+        }
+
+        if method == "GET" && path.hasPrefix("/audit/export") {
+            if path.contains("format=csv") {
+                let csv = RulesEngine.shared.exportAuditLogCSV()
+                sendRawHTTPResponse(connection: connection, status: "200 OK", contentType: "text/csv; charset=utf-8", body: csv)
+            } else {
+                let json = RulesEngine.shared.exportAuditLogJSON()
+                sendHTTPResponse(connection: connection, status: "200 OK", json: json)
+            }
+            return
+        }
+
         if method == "POST" && (path == "/ask" || path == "/hook") {
             if let bodyRange = raw.range(of: "\r\n\r\n") {
                 let bodyString = String(raw[bodyRange.upperBound...])
@@ -162,6 +189,23 @@ final class LocalIPCServer {
         response += "Access-Control-Allow-Origin: *\r\n"
         response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         response += "Access-Control-Allow-Headers: Content-Type\r\n"
+        response += "Connection: close\r\n\r\n"
+
+        var responseData = response.data(using: .utf8) ?? Data()
+        responseData.append(bodyData)
+
+        connection.send(content: responseData, completion: .contentProcessed({ _ in
+            connection.cancel()
+        }))
+    }
+
+    private func sendRawHTTPResponse(connection: NWConnection, status: String, contentType: String, body: String) {
+        let bodyData = body.data(using: .utf8) ?? Data()
+        var response = "HTTP/1.1 \(status)\r\n"
+        response += "Content-Type: \(contentType)\r\n"
+        response += "Content-Length: \(bodyData.count)\r\n"
+        response += "Access-Control-Allow-Origin: *\r\n"
+        response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         response += "Connection: close\r\n\r\n"
 
         var responseData = response.data(using: .utf8) ?? Data()
