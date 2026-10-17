@@ -424,7 +424,7 @@ final class PermissionModel {
     }
 
     func stepScope(_ delta: Int) {
-        guard isAsking, !isHigh else { return }
+        guard isAsking else { return }
         let all = AllowScope.allCases
         guard let i = all.firstIndex(of: scope) else { return }
         let next = min(max(i + delta, 0), all.count - 1)
@@ -443,7 +443,7 @@ final class PermissionModel {
     }
 
     func holdCompleted() {
-        decide(.allow(.once))
+        decide(.allow(scope))
     }
 
     func authenticateWithTouchID() {
@@ -451,11 +451,11 @@ final class PermissionModel {
         Task { [weak self] in
             guard let self else { return }
             let success = await BiometricAuthManager.shared.authenticate(
-                reason: "Authorize high-risk action: \(request.plainCommand)"
+                reason: "Authorize action: \(request.plainCommand)"
             )
             if success && isAsking {
                 SoundEngine.shared.playAllow()
-                decide(.allow(.once))
+                decide(.allow(self.scope))
             }
         }
     }
@@ -486,7 +486,6 @@ struct PermissionPopupRoot: View {
         PermissionCard(model: model, geometry: geometry)
             .background(GeometryReader { Color.clear.preference(key: CardSizeKey.self, value: $0.size) })
             .onPreferenceChange(CardSizeKey.self, perform: onSize)
-            .padding(PermissionPopupController.margin)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
@@ -929,13 +928,12 @@ struct KeyHint: View {
 
 struct ScopePicker: View {
     @Binding var selection: AllowScope
-    var locked: Bool
+    var locked: Bool = false
     @Namespace private var ns
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AllowScope.allCases) { scope in
-                let disabled = locked && scope != .once
                 Text(scope.label)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(selection == scope ? Color.primary : Color.secondary)
@@ -953,13 +951,10 @@ struct ScopePicker: View {
                     .onTapGesture {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { selection = scope }
                     }
-                    .opacity(disabled ? 0.3 : 1)
-                    .allowsHitTesting(!disabled)
             }
         }
         .padding(3)
         .background(Capsule().fill(Color.primary.opacity(0.07)))
-        .help(locked ? "High-risk actions can only be allowed once" : "")
     }
 }
 
@@ -1020,22 +1015,22 @@ struct HoldToConfirmButton: View {
 final class FloatingPanel: NSPanel {
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect,
-                   styleMask: [.borderless, .nonactivatingPanel],
+                   styleMask: [.borderless],
                    backing: .buffered,
                    defer: false)
         isFloatingPanel = true
-        // ScreenSaver level (1000) guarantees floating above full-screen apps, browsers, and terminal windows
-        level = .screenSaver
+        level = .modalPanel
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
         hidesOnDeactivate = false
         isMovableByWindowBackground = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        becomesKeyOnlyIfNeeded = false
     }
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { true }
 
     /// Allow panel to hug the notch and menu bar area without macOS forcing it down.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
@@ -1046,7 +1041,7 @@ final class FloatingPanel: NSPanel {
 @MainActor
 final class PermissionPopupController {
     static let shared = PermissionPopupController()
-    static let margin: CGFloat = 28
+    static let margin: CGFloat = 0
 
     private final class PendingEntry {
         let request: PermissionRequest
@@ -1063,6 +1058,7 @@ final class PermissionPopupController {
     private var busy = false
     private var activeCommand: String?
     private var activeContinuations: [CheckedContinuation<Decision, Never>] = []
+    private var previousFrontmostApp: NSRunningApplication?
 
     func ask(_ request: PermissionRequest) async -> Decision {
         let cleanCmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1118,16 +1114,19 @@ final class PermissionPopupController {
                 c.resume(returning: decision)
             }
             self.busy = false
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(350))
-                self.pump()
-            }
+            self.pump()
         }
     }
 
     private func present(_ request: PermissionRequest, completion: @escaping (Decision) -> Void) {
         let model = PermissionModel(request: request)
         
+        // Remember which app was actively focused before presenting the prompt
+        if let currentApp = NSWorkspace.shared.frontmostApplication,
+           currentApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+            self.previousFrontmostApp = currentApp
+        }
+
         // Prioritize the screen the user is actively working on (mouse cursor location)
         let mouseLoc = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouseLoc, $0.frame, false) }
@@ -1157,19 +1156,22 @@ final class PermissionPopupController {
             }
             panel.orderOut(nil)
             self?.panel = nil
+
+            // Seamlessly restore keyboard focus back to the user's active editor/terminal
+            if let prev = self?.previousFrontmostApp {
+                prev.activate(options: [.activateIgnoringOtherApps])
+                self?.previousFrontmostApp = nil
+            }
+
             completion(decision)
         }
 
         self.panel = panel
         
-        // Ensure panel is on top of all windows without needing to switch apps
-        panel.level = .screenSaver
+        // Ensure panel is on top and captures key input cleanly
+        panel.level = .modalPanel
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
-        
-        // Modern macOS 14+ activation without requiring dock click
-        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
-        NSApp.activate(ignoringOtherApps: true)
         
         model.start()
     }

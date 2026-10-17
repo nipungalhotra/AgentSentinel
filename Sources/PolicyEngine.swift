@@ -17,22 +17,39 @@ final class PolicyEngine {
     /// Checks if a path is considered a sensitive system or credential location
     func isSensitivePath(_ path: String) -> Bool {
         let p = (path as NSString).expandingTildeInPath
-        let sensitiveSubstrings = [
-            "/etc",
-            "/private/etc",
+        let sensitivePrefixes = [
+            "/etc/",
+            "/private/etc/",
             "/var/root",
-            "/.ssh",
-            "/.aws",
-            "/.gnupg",
             "/Library/Keychains"
         ]
-        return sensitiveSubstrings.contains { p.contains($0) }
+        if p == "/etc" || p == "/private/etc" || sensitivePrefixes.contains(where: { p.hasPrefix($0) }) {
+            return true
+        }
+        let sensitiveContainments = [
+            "/.ssh",
+            "/.aws",
+            "/.gnupg"
+        ]
+        return sensitiveContainments.contains { p.contains($0) }
     }
 
     /// Evaluates if targetPath violates the workspace jail boundary
     func checkJailViolation(targetPath: String, workspaceRoot: String?) -> String? {
-        guard !targetPath.isEmpty else { return nil }
-        let expandedTarget = (targetPath as NSString).expandingTildeInPath
+        let trimmed = targetPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Only evaluate actual file paths, ignore descriptive status strings
+        let nonFileIndicators = ["no", "workspace", "terminal shell", "read only", "n/a", "none"]
+        let lower = trimmed.lowercased()
+        if nonFileIndicators.contains(where: { lower.contains($0) }) && !trimmed.hasPrefix("/") && !trimmed.hasPrefix("~") {
+            return nil
+        }
+        guard trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("./") || trimmed.hasPrefix("../") else {
+            return nil
+        }
+
+        let expandedTarget = (trimmed as NSString).expandingTildeInPath
 
         // 1. Never allow targeting sensitive system/credential directories without biometric escalation
         if isSensitivePath(expandedTarget) {

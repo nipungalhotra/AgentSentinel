@@ -344,10 +344,12 @@ def check_workspace_jail(payload, modifies_files, command):
     workspaces = payload.get('workspacePaths') or []
     if workspaces and len(workspaces) > 0:
         ws_root = os.path.abspath(os.path.expanduser(workspaces[0]))
-        if modifies_files and modifies_files not in ['No', 'No (Read only)', 'Workspace', 'Terminal Shell']:
-            expanded_mod = os.path.abspath(os.path.expanduser(modifies_files))
-            if not expanded_mod.startswith(ws_root) and not expanded_mod.startswith('/tmp'):
-                warnings.append(f"Jail Violation: File target escapes workspace root ({modifies_files})")
+        if modifies_files and (modifies_files.startswith('/') or modifies_files.startswith('~') or modifies_files.startswith('.')):
+            lower_m = modifies_files.lower()
+            if not any(k in lower_m for k in ['no (', 'workspace', 'terminal']):
+                expanded_mod = os.path.abspath(os.path.expanduser(modifies_files))
+                if not expanded_mod.startswith(ws_root) and not expanded_mod.startswith('/tmp') and not expanded_mod.startswith('/var/folders'):
+                    warnings.append(f"Jail Violation: File target escapes workspace root ({modifies_files})")
 
     return warnings
 

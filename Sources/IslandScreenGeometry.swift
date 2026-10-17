@@ -43,41 +43,40 @@ public struct IslandScreenGeometry: Sendable {
             self.notchHeight = max(safeAreaTop, 32)
             let calculatedWidth = screen.frame.width - auxLeft - auxRight
             self.notchWidth = calculatedWidth > 50 ? calculatedWidth : 180
-            self.screenFrame = screen.frame
-            self.topAnchorY = screen.frame.maxY
-            self.centerX = screen.frame.midX
         } else {
-            // Universal Floating Island fallback (Windows, Linux, external Mac displays)
             self.isNotchPresent = false
             self.mode = .floatingIsland
             self.notchWidth = 164
             self.notchHeight = 32
-            self.screenFrame = screen.frame
-            let menuBarOffset: CGFloat = (NSApplication.shared.mainMenu != nil) ? 26 : 0
-            self.topAnchorY = screen.frame.maxY - menuBarOffset - 10
-            self.centerX = screen.frame.midX
         }
+
+        // Camera/Notch bottom anchor calculation
+        // On notched MacBooks: directly below safeAreaTop notch cutout
+        // On external/non-notched displays: directly below the menu bar
+        let cameraBottomY = (safeAreaTop > 0)
+            ? (screen.frame.maxY - safeAreaTop)
+            : screen.visibleFrame.maxY
+
+        self.screenFrame = screen.frame
+        self.topAnchorY = cameraBottomY - (safeAreaTop > 0 ? 4 : 8)
+        self.centerX = screen.frame.midX
     }
 
-    /// Calculate the panel frame for the current unfolding animation phase
-    public func frame(forContentSize size: CGSize, margin: CGFloat, morphProgress: CGFloat) -> NSRect {
-        let targetWidth = size.width + margin * 2
-        let targetHeight = size.height + margin * 2
+    /// Calculate the panel frame centered directly below the camera
+    public func frame(forContentSize size: CGSize, margin: CGFloat = 0, morphProgress: CGFloat = 1.0) -> NSRect {
+        let finalWidth = size.width
+        let finalHeight = size.height
 
-        if mode == .physicalNotch {
-            // Unfolds downward directly from the camera notch cutout
-            let currentWidth = notchWidth + (targetWidth - notchWidth) * morphProgress
-            let currentHeight = notchHeight + (targetHeight - notchHeight) * morphProgress
-            let x = centerX - currentWidth / 2
-            let y = topAnchorY + margin - currentHeight
-            return NSRect(x: x, y: y, width: currentWidth, height: currentHeight)
-        } else {
-            // Universal Floating Island: Expands symmetrically with top anchor
-            let currentWidth = notchWidth + (targetWidth - notchWidth) * morphProgress
-            let currentHeight = notchHeight + (targetHeight - notchHeight) * morphProgress
-            let x = centerX - currentWidth / 2
-            let y = topAnchorY + margin - currentHeight
-            return NSRect(x: x, y: y, width: currentWidth, height: currentHeight)
-        }
+        let currentWidth = (mode == .physicalNotch)
+            ? (notchWidth + (finalWidth - notchWidth) * morphProgress)
+            : finalWidth
+        let currentHeight = (mode == .physicalNotch)
+            ? (notchHeight + (finalHeight - notchHeight) * morphProgress)
+            : finalHeight
+
+        let x = centerX - (currentWidth / 2)
+        let y = topAnchorY - currentHeight
+
+        return NSRect(x: x, y: y, width: currentWidth, height: currentHeight)
     }
 }

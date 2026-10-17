@@ -48,19 +48,27 @@ final class RulesEngine {
         recentApprovals[cmd] = Date()
     }
 
+    private func isCatastrophicDestructive(_ command: String) -> Bool {
+        let lower = command.lowercased()
+        if lower.contains("rm -rf /") || lower.contains("rm -fr /") || lower.contains("mkfs") || lower.contains("> /dev/sd") || lower.contains(":(){ :|:& };:") {
+            return true
+        }
+        return false
+    }
+
     func evaluate(request: PermissionRequest) -> Decision? {
         cleanupExpired()
 
         let cmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 0. Deduplicate: if this exact command was approved in the last 5 seconds, auto-allow immediately
+        // 0. Deduplicate: if this exact command was approved in the last 15 seconds, auto-allow immediately
         if isRecentlyApproved(command: cmd) {
             recordDecision(request: request, decision: .allow(.once), autoAllowed: true)
             return .allow(.once)
         }
 
-        // High risk operations cannot be automatically bypassed by persistent rules
-        if request.risk == .high {
+        // Catastrophic root destructive operations cannot be automatically bypassed
+        if isCatastrophicDestructive(cmd) {
             return nil
         }
 
