@@ -92,6 +92,16 @@ def resolve_directory(payload):
     cwd = None
     if isinstance(tool_args, dict):
         cwd = tool_args.get('Cwd') or tool_args.get('cwd') or tool_args.get('DirectoryPath')
+        if not cwd:
+            for k in ['AbsolutePath', 'TargetFile', 'FilePath', 'file_path', 'path', 'SearchPath']:
+                val = tool_args.get(k)
+                if val:
+                    val_str = str(val)
+                    if os.path.isdir(val_str):
+                        cwd = val_str
+                    else:
+                        cwd = os.path.dirname(val_str)
+                    break
 
     if not cwd and payload.get('workspacePaths') and len(payload['workspacePaths']) > 0:
         cwd = payload['workspacePaths'][0]
@@ -107,41 +117,55 @@ def resolve_directory(payload):
 
     cwd_str = str(cwd)
     home = os.path.expanduser('~')
-    if cwd_str.startswith(home):
-        return '~' + cwd_str[len(home):]
+    if cwd_str == home:
+        return '~'
+    if cwd_str.startswith(home + '/'):
+        return '~/' + cwd_str[len(home) + 1:]
     return cwd_str
 
 def extract_modifies_files(payload, tool_name):
+    t_lower = (tool_name or '').lower()
+
+    # Read-only tools NEVER modify files
+    read_only_tools = ['view_file', 'grep_search', 'list_dir', 'read_url_content', 'read_resource', 'list_resources', 'inspect_']
+    if any(r in t_lower for r in read_only_tools):
+        return "No (Read only)"
+
     tool = payload.get('toolCall') or {}
     args = tool.get('args') if isinstance(tool.get('args'), dict) else (payload.get('tool_input') or {})
     if isinstance(args, dict):
-        for k in ['TargetFile', 'AbsolutePath', 'FilePath', 'file_path', 'path']:
+        for k in ['TargetFile', 'file_path', 'FilePath']:
             if args.get(k):
                 val = str(args[k])
                 home = os.path.expanduser('~')
-                if val.startswith(home):
-                    return '~' + val[len(home):]
+                if val == home:
+                    return '~'
+                if val.startswith(home + '/'):
+                    return '~/' + val[len(home) + 1:]
                 return val
-        if 'SearchPath' in args:
-            val = str(args['SearchPath'])
-            home = os.path.expanduser('~')
-            if val.startswith(home):
-                return '~' + val[len(home):]
-            return val
+
     if tool_name == 'run_command':
-        return 'Terminal Shell'
-    return 'Workspace'
+        cmd = extract_command(payload).lower()
+        if any(w in cmd for w in ['rm ', 'rmdir', 'mkdir', 'touch', 'mv ', 'cp ', 'git checkout', 'git reset', 'git apply', 'npm i', 'pip install']):
+            return 'Yes, via shell command'
+        return 'No (Command execution)'
+
+    return 'No'
+
+DEDUP_CACHE_FILE = '/tmp/sentinel_dedup.json'
 
 def check_recent_dedup(tool_name, command):
     try:
-        cache_path = '/tmp/sentinel_dedup.json'
-        if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
-                data = json.load(f)
-                if data.get('tool') == tool_name and data.get('command') == command:
-                    import time
-                    if time.time() - data.get('time', 0) < 4.0:
-                        return True
+        if os.path.exists(DEDUP_CACHE_FILE):
+            with open(DEDUP_CACHE_FILE, 'r') as f:
+                entries = json.load(f)
+                if not isinstance(entries, dict):
+                    return False
+                key = f"{tool_name}:{command}"
+                import time
+                ts = entries.get(key, 0)
+                if time.time() - ts < 15.0:
+                    return True
     except Exception:
         pass
     return False
@@ -149,25 +173,40 @@ def check_recent_dedup(tool_name, command):
 def record_recent_dedup(tool_name, command):
     try:
         import time
-        cache_path = '/tmp/sentinel_dedup.json'
-        with open(cache_path, 'w') as f:
-            json.dump({'tool': tool_name, 'command': command, 'time': time.time()}, f)
+        now = time.time()
+        entries = {}
+        if os.path.exists(DEDUP_CACHE_FILE):
+            try:
+                with open(DEDUP_CACHE_FILE, 'r') as f:
+                    entries = json.load(f)
+                    if not isinstance(entries, dict):
+                        entries = {}
+            except Exception:
+                entries = {}
+        entries = {k: v for k, v in entries.items() if now - v < 30.0}
+        key = f"{tool_name}:{command}"
+        entries[key] = now
+        with open(DEDUP_CACHE_FILE, 'w') as f:
+            json.dump(entries, f)
     except Exception:
         pass
 
 def extract_command(payload):
-    tool_input = payload.get('tool_input') or {}
-    if isinstance(tool_input, dict):
-        if 'command' in tool_input:
-            return str(tool_input['command'])
-        if 'CommandLine' in tool_input:
-            return str(tool_input['CommandLine'])
-        if 'file_path' in tool_input:
-            return f"Edit {tool_input.get('file_path')}"
-        if 'TargetFile' in tool_input:
-            return f"Write {tool_input.get('TargetFile')}"
-        if 'url' in tool_input:
-            return f"Fetch {tool_input.get('url')}"
+    tool = payload.get('toolCall') or {}
+    tool_args = tool.get('args') if isinstance(tool.get('args'), dict) else (payload.get('tool_input') or {})
+    if isinstance(tool_args, dict):
+        if 'command' in tool_args:
+            return str(tool_args['command'])
+        if 'CommandLine' in tool_args:
+            return str(tool_args['CommandLine'])
+        if 'file_path' in tool_args:
+            return f"Edit {tool_args.get('file_path')}"
+        if 'TargetFile' in tool_args:
+            return f"Write {tool_args.get('TargetFile')}"
+        if 'AbsolutePath' in tool_args:
+            return f"Inspect {tool_args.get('AbsolutePath')}"
+        if 'url' in tool_args:
+            return f"Fetch {tool_args.get('url')}"
 
     cmd = payload.get('command') or payload.get('tool_name') or 'Execute Tool'
     return str(cmd)
@@ -175,25 +214,26 @@ def extract_command(payload):
 def determine_risk(command, tool_name):
     cmd_lower = (command or '').lower()
     t_lower = (tool_name or '').lower()
+    tokens = cmd_lower.split()
+    first_token = tokens[0] if tokens else ''
 
-    high_risk_patterns = [
-        'rm -rf', 'rm -r', 'rmdir', 'dd ', 'mkfs', 'shutdown',
-        'sudo ', 'chmod -r 777', 'chown -r', 'kill -9',
-        '> /dev/sd', 'drop database', 'drop table', 'truncate table',
-        ':(){ :|:& };:'
-    ]
-    for pat in high_risk_patterns:
-        if pat in cmd_lower:
-            return 'high'
+    # Dangerous destructive or privilege escalation operations
+    is_rm_rf = 'rm' in tokens and any(flag in tokens for flag in ['-rf', '-fr', '-r'])
+    is_sudo = first_token == 'sudo' or ' sudo ' in cmd_lower or '; sudo ' in cmd_lower or '&& sudo ' in cmd_lower or '| sudo ' in cmd_lower
+    is_dd = (first_token == 'dd' or ' dd if=' in cmd_lower) and ('of=/dev/' in cmd_lower or 'of=/dev/r' in cmd_lower or 'bs=' in cmd_lower)
+    is_disk_destructive = any(p in cmd_lower for p in ['mkfs', 'shutdown', '> /dev/sd', 'drop database', 'drop table', 'truncate table', 'chmod -r 777', 'chown -r'])
+    is_fork_bomb = ':(){ :|:& };:' in cmd_lower
 
-    medium_risk_patterns = [
-        'git push --force', 'git reset --hard', 'npm publish', 'pip install',
-        'brew install', 'curl ', 'wget ', 'pkill', 'kill ', 'mv ', 'cp -r',
-        'write_to_file', 'replace_file_content'
-    ]
-    for pat in medium_risk_patterns:
-        if pat in cmd_lower or pat in t_lower:
-            return 'medium'
+    if is_rm_rf or is_sudo or is_dd or is_disk_destructive or is_fork_bomb:
+        return 'high'
+
+    # Medium risk: operations that modify repository state or install packages
+    is_pkg_install = any(cmd in cmd_lower for cmd in ['npm install', 'npm i ', 'pip install', 'brew install', 'gem install', 'cargo install'])
+    is_git_mod = 'git push' in cmd_lower or 'git reset' in cmd_lower or 'git commit' in cmd_lower or 'git branch -d' in cmd_lower
+    is_file_mod = t_lower in ['write_to_file', 'replace_file_content', 'multi_replace_file_content']
+
+    if is_pkg_install or is_git_mod or is_file_mod:
+        return 'medium'
 
     return 'low'
 
@@ -315,7 +355,7 @@ def main():
         command = extract_command(payload)
         risk = determine_risk(command, t_name)
 
-        # Check deduplication cache: if the exact same (tool, command) was approved within 4 seconds, auto-allow!
+        # Check deduplication cache: if the exact same (tool, command) was approved recently, auto-allow!
         if check_recent_dedup(t_name, command):
             out = {'decision': 'allow'}
             sys.stdout.write(json.dumps(out) + '\n')
@@ -335,7 +375,7 @@ def main():
             'modifiesFiles': modifies_files,
             'symbol': 'sparkles' if agent == 'antigravity' else ('terminal.fill' if 'Bash' in t_name else 'pencil.and.outline'),
             'tool': t_name,
-            'forcePrompt': True,
+            'forcePrompt': False,
             'raw': payload
         }
 
@@ -418,7 +458,7 @@ def main():
                             'hookEventName': 'PermissionRequest',
                             'decision': {
                                 'behavior': 'deny',
-                                'message': 'Denied from Agent Sentinel'
+                                'message': 'Denied from loggdin'
                             }
                         }
                     }

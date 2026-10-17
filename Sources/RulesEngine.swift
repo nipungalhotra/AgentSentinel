@@ -19,13 +19,13 @@ final class RulesEngine {
 
     // MARK: - Evaluation
 
-    // In-memory deduplication: prevent identical command popups within 5 seconds
+    // In-memory deduplication: prevent identical command popups within 15 seconds
     private var recentApprovals: [String: Date] = [:]
 
     private func isRecentlyApproved(command: String) -> Bool {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if let timestamp = recentApprovals[cmd] {
-            if Date().timeIntervalSince(timestamp) < 5.0 {
+            if Date().timeIntervalSince(timestamp) < 15.0 {
                 return true
             } else {
                 recentApprovals.removeValue(forKey: cmd)
@@ -152,7 +152,7 @@ final class RulesEngine {
 
     private func commandBase(for command: String) -> String {
         let parts = command.split(separator: " ").map(String.init)
-        if parts.count >= 2 && (parts[0] == "npm" || parts[0] == "cargo" || parts[0] == "brew" || parts[0] == "git" || parts[0] == "swift") {
+        if parts.count >= 2 && (parts[0] == "npm" || parts[0] == "cargo" || parts[0] == "brew" || parts[0] == "git" || parts[0] == "swift" || parts[0] == "docker" || parts[0] == "terraform" || parts[0] == "gh" || parts[0] == "pip" || parts[0] == "pip3") {
             return "\(parts[0]) \(parts[1])"
         }
         return parts.first ?? command

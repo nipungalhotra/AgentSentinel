@@ -167,12 +167,27 @@ struct PermissionRequest: Identifiable, Codable {
         var parsedTokens: [CommandToken] = []
         var detectedRisk: Risk = .low
 
+        let lower = command.lowercased()
+        let isRm = parts.contains("rm") || parts.contains("rmdir") || parts.contains("unlink")
+        let isRmRf = isRm && (parts.contains("-rf") || parts.contains("-fr") || parts.contains("-r") || parts.contains("-f"))
+        let isSudo = parts.first == "sudo" || lower.contains(" sudo ") || lower.contains("; sudo ") || lower.contains("&& sudo ") || lower.contains("| sudo ")
+        let isDd = (parts.first == "dd" || lower.contains(" dd if=")) && (lower.contains("of=/dev/") || lower.contains("bs="))
+        let isDrop = lower.contains("drop table") || lower.contains("drop database") || lower.contains("truncate table")
+        let isDiskDestructive = lower.contains("mkfs") || lower.contains("> /dev/sd") || lower.contains("chmod -r 777") || lower.contains("chown -r")
+
+        if isRmRf || isSudo || isDd || isDrop || isDiskDestructive {
+            detectedRisk = .high
+        } else if lower.contains("npm install") || lower.contains("npm i ") || lower.contains("pip install") || lower.contains("brew install") || lower.contains("git push") || lower.contains("git reset") {
+            detectedRisk = .medium
+        }
+
         for (i, part) in parts.enumerated() {
             if i == 0 {
                 parsedTokens.append(CommandToken(part, .command))
-            } else if part == "-rf" || part == "--force" || part.contains("rm") || part.contains("drop") {
+            } else if part == "-rf" || part == "-fr" || (isRm && (part == "-r" || part == "-f")) {
                 parsedTokens.append(CommandToken(part, .danger))
-                detectedRisk = .high
+            } else if isRm && part == "rm" {
+                parsedTokens.append(CommandToken(part, .danger))
             } else if part.hasPrefix("-") || part.contains("/") || part.contains(".") {
                 parsedTokens.append(CommandToken(part, .argument))
             } else {
@@ -180,15 +195,9 @@ struct PermissionRequest: Identifiable, Codable {
             }
         }
 
-        if command.contains("rm -rf") || command.contains("sudo") || command.contains("dd ") {
-            detectedRisk = .high
-        } else if command.contains("npm i") || command.contains("install") || command.contains("pip") || command.contains("git push") {
-            detectedRisk = .medium
-        }
-
         let smartSymbol: String = {
             if symbol != "terminal" { return symbol }
-            if command.contains("rm") || command.contains("delete") || command.contains("drop") { return "trash" }
+            if isRm || lower.contains("delete") || isDrop { return "trash" }
             if command.contains("git") { return "arrow.triangle.branch" }
             if command.contains("npm") || command.contains("cargo") || command.contains("pip") || command.contains("brew") { return "shippingbox" }
             if command.contains("curl") || command.contains("wget") || command.contains("http") { return "globe" }
@@ -197,11 +206,12 @@ struct PermissionRequest: Identifiable, Codable {
         }()
 
         self.id = UUID()
-        self.title = title ?? (detectedRisk == .high ? "Delete files or execute dangerous command?" : "Run this command?")
-        self.subtitle = subtitle ?? "\(requestedBy) • \(detectedRisk == .high ? "File System" : "Terminal")"
+        let resolvedRisk = risk ?? detectedRisk
+        self.title = title ?? (resolvedRisk == .high ? "Delete files or execute dangerous command?" : "Run this command?")
+        self.subtitle = subtitle ?? "\(requestedBy) • \(resolvedRisk == .high ? "File System" : "Terminal")"
         self.symbol = smartSymbol
         self.tokens = parsedTokens.isEmpty ? [CommandToken(command, .command)] : parsedTokens
-        self.risk = risk ?? detectedRisk
+        self.risk = resolvedRisk
         self.requestedBy = requestedBy
         self.directory = directory
         self.modifiesFiles = modifiesFiles
@@ -231,18 +241,30 @@ struct PermissionRequest: Identifiable, Codable {
 
     var category: PermissionCategory {
         let cmd = plainCommand.lowercased()
-        if cmd.contains("rm ") || cmd.contains("delete") || cmd.contains("drop") || risk == .high {
+        let parts = cmd.split(separator: " ").map(String.init)
+
+        let isRm = parts.contains("rm") || parts.contains("rmdir") || parts.contains("unlink")
+        let isDrop = cmd.contains("drop table") || cmd.contains("drop database") || cmd.contains("truncate table")
+        if isRm || isDrop || (risk == .high && !cmd.contains("sudo")) {
             return .delete
         }
-        if cmd.contains("cat ") || cmd.contains("read") || cmd.contains("head ") || symbol == "doc" {
+
+        let isReadCmd = parts.first == "cat" || parts.first == "head" || parts.first == "tail" || parts.first == "less" || parts.first == "more" || parts.first == "grep"
+        let isReadTool = cmd.contains("view_file") || cmd.contains("read_file") || symbol == "doc" || symbol == "doc.text"
+        if isReadCmd || isReadTool {
             return .readFile
         }
-        if cmd.contains("curl") || cmd.contains("http") || cmd.contains("fetch") || cmd.contains("wget") || symbol == "globe" {
+
+        let isNetCmd = parts.first == "curl" || parts.first == "wget" || parts.first == "ping" || parts.first == "ssh"
+        let isNetTool = cmd.contains("http://") || cmd.contains("https://") || cmd.contains("read_url_content") || symbol == "globe"
+        if isNetCmd || isNetTool {
             return .network
         }
-        if cmd.contains("choose") || cmd.contains("confirm") || cmd.contains("ask") {
+
+        if parts.first == "choose" || parts.first == "prompt" || cmd.contains("ask_question") || symbol == "sparkles" || symbol == "questionmark" {
             return .question
         }
+
         return .command
     }
 

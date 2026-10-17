@@ -980,27 +980,79 @@ final class PermissionPopupController {
     static let shared = PermissionPopupController()
     static let margin: CGFloat = 28
 
+    private final class PendingEntry {
+        let request: PermissionRequest
+        var continuations: [CheckedContinuation<Decision, Never>]
+
+        init(request: PermissionRequest, continuation: CheckedContinuation<Decision, Never>) {
+            self.request = request
+            self.continuations = [continuation]
+        }
+    }
+
     private var panel: FloatingPanel?
-    private var queue: [(PermissionRequest, CheckedContinuation<Decision, Never>)] = []
+    private var queue: [PendingEntry] = []
     private var busy = false
+    private var activeCommand: String?
+    private var activeContinuations: [CheckedContinuation<Decision, Never>] = []
 
     func ask(_ request: PermissionRequest) async -> Decision {
-        await withCheckedContinuation { continuation in
-            queue.append((request, continuation))
+        let cleanCmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. If currently displaying the EXACT same command on screen, piggyback on it
+        if busy, let active = activeCommand, active == cleanCmd {
+            return await withCheckedContinuation { continuation in
+                activeContinuations.append(continuation)
+            }
+        }
+
+        // 2. If an identical command is already queued waiting, coalesce with it
+        for entry in queue {
+            if entry.request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines) == cleanCmd {
+                return await withCheckedContinuation { continuation in
+                    entry.continuations.append(continuation)
+                }
+            }
+        }
+
+        // 3. Otherwise enqueue and pump
+        return await withCheckedContinuation { continuation in
+            queue.append(PendingEntry(request: request, continuation: continuation))
             pump()
         }
     }
 
     private func pump() {
         guard !busy, !queue.isEmpty else { return }
+        let entry = queue.removeFirst()
+        let request = entry.request
+
+        // If rules engine or recent approval already covers this request, resolve immediately
+        if let autoDecision = RulesEngine.shared.evaluate(request: request) {
+            for c in entry.continuations {
+                c.resume(returning: autoDecision)
+            }
+            pump()
+            return
+        }
+
         busy = true
-        let (request, continuation) = queue.removeFirst()
+        activeCommand = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        activeContinuations = entry.continuations
+
         present(request) { [weak self] decision in
-            continuation.resume(returning: decision)
-            self?.busy = false
+            guard let self else { return }
+            let waiters = self.activeContinuations
+            self.activeContinuations.removeAll()
+            self.activeCommand = nil
+
+            for c in waiters {
+                c.resume(returning: decision)
+            }
+            self.busy = false
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(350))
-                self?.pump()
+                self.pump()
             }
         }
     }

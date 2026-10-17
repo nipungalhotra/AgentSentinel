@@ -48,7 +48,7 @@ final class SentinelManager: NSObject {
 
         // 2. Deliver System Notification & Trigger Notch Popup
         pendingCount += 1
-        updateMenuBarIcon()
+        updateMenuBar()
 
         deliverSystemNotification(for: request)
 
@@ -57,7 +57,7 @@ final class SentinelManager: NSObject {
 
         pendingCount = max(0, pendingCount - 1)
         lastDecisionSummary = "\(decision.summary): \(request.plainCommand)"
-        updateMenuBarIcon()
+        updateMenuBar()
 
         return decision
     }
@@ -74,9 +74,19 @@ final class SentinelManager: NSObject {
     // MARK: - Menu Bar Setup
 
     private func setupMenuBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateMenuBarIcon()
+        if statusItem == nil {
+            statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        }
+        updateMenuBar()
+    }
 
+    private func updateMenuBar() {
+        updateMenuBarIcon()
+        rebuildMenu()
+    }
+
+    private func rebuildMenu() {
+        guard let statusItem else { return }
         let menu = NSMenu()
 
         let headerItem = NSMenuItem(title: "loggdin • Agent Sentinel", action: nil, keyEquivalent: "")
@@ -152,7 +162,7 @@ final class SentinelManager: NSObject {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem?.menu = menu
+        statusItem.menu = menu
     }
 
     private func updateMenuBarIcon() {
@@ -187,8 +197,7 @@ final class SentinelManager: NSObject {
 
     @objc private func toggleProtectionAction() {
         isProtectionEnabled.toggle()
-        updateMenuBarIcon()
-        setupMenuBar()
+        updateMenuBar()
     }
 
     @objc private func quitAction() {
