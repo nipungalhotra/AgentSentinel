@@ -165,6 +165,11 @@ final class SentinelManager: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
+        let ip = MobileWebCompanion.getLocalIPAddress()
+        let phoneItem = NSMenuItem(title: "📱 Phone Companion (http://\(ip):9191)", action: #selector(openPhoneCompanionAction), keyEquivalent: "p")
+        phoneItem.target = self
+        menu.addItem(phoneItem)
+
         let dashboardItem = NSMenuItem(title: "Open Sessions Hub & Rules...", action: #selector(openDashboardAction), keyEquivalent: "d")
         dashboardItem.target = self
         menu.addItem(dashboardItem)
@@ -236,6 +241,16 @@ final class SentinelManager: NSObject {
 
     @objc private func openDashboardAction() {
         openDashboard()
+    }
+
+    @objc private func openPhoneCompanionAction() {
+        let ip = MobileWebCompanion.getLocalIPAddress()
+        let urlStr = "http://\(ip):9191"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(urlStr, forType: .string)
+        if let url = URL(string: urlStr) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func simulateAction(_ sender: NSMenuItem) {

@@ -317,7 +317,7 @@ final class PermissionModel {
     }
 
     var isHigh: Bool { request.risk == .high }
-    var timeout: Double { isHigh ? 30 : 20 }
+    var timeout: Double { isHigh ? 60 : 45 }
     var baseFace: FaceState { (warn || isHigh) ? .worried : .idle }
 
     var titleText: String {
@@ -1059,6 +1059,37 @@ final class PermissionPopupController {
     private var activeCommand: String?
     private var activeContinuations: [CheckedContinuation<Decision, Never>] = []
     private var previousFrontmostApp: NSRunningApplication?
+    private(set) var activeRequest: PermissionRequest?
+    private var activeModel: PermissionModel?
+
+    func currentPendingRequest() -> PermissionRequest? {
+        return activeRequest ?? queue.first?.request
+    }
+
+    @discardableResult
+    func submitExternalDecision(_ decision: Decision, forRequestId requestId: String? = nil) -> Bool {
+        if let model = activeModel {
+            if let reqId = requestId, !reqId.isEmpty, reqId.lowercased() != "latest",
+               model.request.id.uuidString.caseInsensitiveCompare(reqId) != .orderedSame {
+                return false
+            }
+            model.decide(decision)
+            return true
+        }
+        if !queue.isEmpty {
+            let first = queue.removeFirst()
+            if let reqId = requestId, !reqId.isEmpty, reqId.lowercased() != "latest",
+               first.request.id.uuidString.caseInsensitiveCompare(reqId) != .orderedSame {
+                queue.insert(first, at: 0)
+                return false
+            }
+            for c in first.continuations {
+                c.resume(returning: decision)
+            }
+            return true
+        }
+        return false
+    }
 
     func ask(_ request: PermissionRequest) async -> Decision {
         let cleanCmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1109,6 +1140,8 @@ final class PermissionPopupController {
             let waiters = self.activeContinuations
             self.activeContinuations.removeAll()
             self.activeCommand = nil
+            self.activeRequest = nil
+            self.activeModel = nil
 
             for c in waiters {
                 c.resume(returning: decision)
@@ -1120,6 +1153,8 @@ final class PermissionPopupController {
 
     private func present(_ request: PermissionRequest, completion: @escaping (Decision) -> Void) {
         let model = PermissionModel(request: request)
+        self.activeRequest = request
+        self.activeModel = model
         
         // Remember which app was actively focused before presenting the prompt
         if let currentApp = NSWorkspace.shared.frontmostApplication,

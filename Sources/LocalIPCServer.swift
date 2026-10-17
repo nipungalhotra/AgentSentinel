@@ -161,6 +161,110 @@ final class LocalIPCServer {
             return
         }
 
+        // MARK: Mobile Web Companion & Remote Decision Endpoints
+        if method == "GET" && (path == "/" || path == "/mobile") {
+            sendRawHTTPResponse(connection: connection, status: "200 OK", contentType: "text/html; charset=utf-8", body: MobileWebCompanion.html)
+            return
+        }
+
+        if method == "GET" && (path == "/pending" || path.hasPrefix("/pending?")) {
+            let grants = RulesEngine.shared.activeGrants.count
+            let rules = RulesEngine.shared.storedRules.count
+            if let req = PermissionPopupController.shared.currentPendingRequest() {
+                let jsonDict: [String: Any] = [
+                    "hasPending": true,
+                    "activeGrants": grants,
+                    "savedRules": rules,
+                    "request": [
+                        "id": req.id.uuidString,
+                        "title": req.title,
+                        "subtitle": req.subtitle,
+                        "command": req.plainCommand,
+                        "risk": req.risk.rawValue,
+                        "requestedBy": req.requestedBy,
+                        "directory": req.directory,
+                        "modifiesFiles": req.modifiesFiles,
+                        "secretWarnings": req.secretWarnings ?? []
+                    ]
+                ]
+                if let data = try? JSONSerialization.data(withJSONObject: jsonDict),
+                   let jsonStr = String(data: data, encoding: .utf8) {
+                    sendHTTPResponse(connection: connection, status: "200 OK", json: jsonStr)
+                    return
+                }
+            }
+
+            let idleJSON = """
+            {
+                "hasPending": false,
+                "activeGrants": \(grants),
+                "savedRules": \(rules)
+            }
+            """
+            sendHTTPResponse(connection: connection, status: "200 OK", json: idleJSON)
+            return
+        }
+
+        if method == "POST" && (path == "/decision" || path == "/mobile/decision") {
+            if let bodyRange = raw.range(of: "\r\n\r\n") {
+                let bodyString = String(raw[bodyRange.upperBound...])
+                if let data = bodyString.data(using: .utf8),
+                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                    let reqId = obj["id"] as? String
+                    let action = (obj["action"] as? String ?? "allow").lowercased()
+                    let scopeStr = (obj["scope"] as? String ?? "once").lowercased()
+
+                    let decision: Decision
+                    if action == "deny" {
+                        decision = .deny
+                    } else {
+                        let scope: AllowScope
+                        switch scopeStr {
+                        case "tenminutes", "10m", "10min":
+                            scope = .tenMinutes
+                        case "always":
+                            scope = .always
+                        default:
+                            scope = .once
+                        }
+                        decision = .allow(scope)
+                    }
+
+                    let handled = PermissionPopupController.shared.submitExternalDecision(decision, forRequestId: reqId)
+                    let responseJSON = """
+                    {
+                        "success": \(handled),
+                        "decision": "\(action)",
+                        "scope": "\(scopeStr)"
+                    }
+                    """
+                    sendHTTPResponse(connection: connection, status: "200 OK", json: responseJSON)
+                    return
+                }
+            }
+            sendHTTPResponse(connection: connection, status: "400 Bad Request", json: "{\"error\":\"Missing or invalid decision JSON\"}")
+            return
+        }
+
+        if method == "POST" && path == "/mobile/test" {
+            Task {
+                let testReq = PermissionRequest(
+                    title: "Deploy to Cloud Run?",
+                    subtitle: "Antigravity • DeployService",
+                    symbol: "sparkles",
+                    command: "gcloud run deploy agent-sentinel --region=us-central1",
+                    risk: .medium,
+                    requestedBy: "Antigravity",
+                    directory: "~/Projects/CloudRun",
+                    modifiesFiles: "Remote Cloud Infrastructure",
+                    secretWarnings: ["Outbound deployment to production cluster"]
+                )
+                _ = await SentinelManager.shared.evaluateOrAsk(testReq, forcePrompt: true)
+            }
+            sendHTTPResponse(connection: connection, status: "200 OK", json: "{\"success\":true,\"message\":\"Test prompt triggered\"}")
+            return
+        }
+
         if method == "POST" && (path == "/ask" || path == "/hook") {
             if let bodyRange = raw.range(of: "\r\n\r\n") {
                 let bodyString = String(raw[bodyRange.upperBound...])

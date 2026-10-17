@@ -53,6 +53,12 @@ Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, loggd
 - High-risk operations (e.g., modifying files outside the workspace or executing destructive commands) highlight the card in warm amber/red.
 - Complete the action seamlessly by touching the Touch ID sensor or holding the confirm button for 1 second.
 
+### 📱 5. Mobile Phone Remote Companion
+- Open `http://<your-mac-ip>:9191` in Safari on your iPhone or Chrome on Android on the same Wi-Fi.
+- Real-time polling with haptic feedback vibrations when an AI agent prompts for permission.
+- Review commands, risk level, file blast radius, and secrets warnings directly on your phone screen.
+- Tap **Allow Once**, **Allow for 10 Min**, **Always Allow**, or **Deny** from anywhere in the room to authorize actions on your Mac without touching your keyboard.
+
 ---
 
 ## 📦 Installation & Packaging
