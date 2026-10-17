@@ -40,9 +40,30 @@ final class SentinelManager: NSObject {
             return .allow(.once)
         }
 
-        // 1. Check rules and active grants (bypassed if forcePrompt is true)
-        if !forcePrompt, let autoDecision = rulesEngine.evaluate(request: request) {
-            lastDecisionSummary = "Auto-\(autoDecision.summary): \(request.plainCommand)"
+        // Production Feature: Workspace Path Jail & Sensitive Boundary Enforcement
+        var activeRequest = request
+        if let violation = PolicyEngine.shared.checkJailViolation(targetPath: request.modifiesFiles, workspaceRoot: request.directory) {
+            var warnings = activeRequest.secretWarnings ?? []
+            warnings.append(violation)
+            activeRequest = PermissionRequest(
+                id: activeRequest.id,
+                title: "Authorize out-of-bounds action?",
+                subtitle: "\(activeRequest.requestedBy) • Out of Workspace Jail",
+                symbol: "shield.slash.fill",
+                tokens: activeRequest.tokens,
+                risk: .high,
+                requestedBy: activeRequest.requestedBy,
+                directory: activeRequest.directory,
+                modifiesFiles: activeRequest.modifiesFiles,
+                secretWarnings: warnings,
+                diffPreview: activeRequest.diffPreview,
+                blastRadius: activeRequest.blastRadius
+            )
+        }
+
+        // 1. Check rules and active grants (bypassed if forcePrompt is true or jail violation)
+        if !forcePrompt && activeRequest.risk != .high, let autoDecision = rulesEngine.evaluate(request: activeRequest) {
+            lastDecisionSummary = "Auto-\(autoDecision.summary): \(activeRequest.plainCommand)"
             return autoDecision
         }
 
@@ -50,13 +71,21 @@ final class SentinelManager: NSObject {
         pendingCount += 1
         updateMenuBar()
 
-        deliverSystemNotification(for: request)
+        deliverSystemNotification(for: activeRequest)
 
-        let decision = await PermissionPopupController.shared.ask(request)
-        rulesEngine.recordDecision(request: request, decision: decision, autoAllowed: false)
+        let decision = await PermissionPopupController.shared.ask(activeRequest)
+        rulesEngine.recordDecision(request: activeRequest, decision: decision, autoAllowed: false)
+
+        // Production Feature: Time Machine File Snapshot before modifications
+        if decision.isAllowed {
+            let modFile = (activeRequest.modifiesFiles as NSString).expandingTildeInPath
+            if !modFile.isEmpty && modFile != "No" && modFile != "No (Read only)" && modFile != "Workspace" && FileManager.default.fileExists(atPath: modFile) {
+                SnapshotManager.shared.createSnapshot(for: modFile, agent: activeRequest.requestedBy)
+            }
+        }
 
         pendingCount = max(0, pendingCount - 1)
-        lastDecisionSummary = "\(decision.summary): \(request.plainCommand)"
+        lastDecisionSummary = "\(decision.summary): \(activeRequest.plainCommand)"
         updateMenuBar()
 
         return decision
@@ -151,6 +180,27 @@ final class SentinelManager: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
+        let rollbackHeader = NSMenuItem(title: "ACTION ROLLBACK (TIME MACHINE)", action: nil, keyEquivalent: "")
+        rollbackHeader.isEnabled = false
+        menu.addItem(rollbackHeader)
+
+        if let latest = SnapshotManager.shared.latestSnapshot {
+            let undoItem = NSMenuItem(
+                title: "⎌ Undo Agent Edit (\(latest.filename) • \(latest.timeAgo))",
+                action: #selector(undoLastAction),
+                keyEquivalent: "z"
+            )
+            undoItem.keyEquivalentModifierMask = [.command, .control]
+            undoItem.target = self
+            menu.addItem(undoItem)
+        } else {
+            let undoItem = NSMenuItem(title: "⎌ Undo Agent Edit (No snapshots)", action: nil, keyEquivalent: "")
+            undoItem.isEnabled = false
+            menu.addItem(undoItem)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+
         let toggleProtection = NSMenuItem(title: isProtectionEnabled ? "Pause Protection" : "Resume Protection",
                                           action: #selector(toggleProtectionAction), keyEquivalent: "p")
         toggleProtection.target = self
@@ -193,6 +243,11 @@ final class SentinelManager: NSObject {
                 _ = await evaluateOrAsk(sample, forcePrompt: true)
             }
         }
+    }
+
+    @objc private func undoLastAction() {
+        SnapshotManager.shared.undoLatest()
+        updateMenuBar()
     }
 
     @objc private func toggleProtectionAction() {

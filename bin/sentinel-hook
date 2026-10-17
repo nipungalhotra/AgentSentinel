@@ -329,6 +329,46 @@ def calculate_blast_radius(payload, tool_name, command):
 
     return "Workspace"
 
+SENSITIVE_TARGETS = ['/.ssh', '/.aws', '/.gnupg', '/etc/', '/private/etc', '/var/root', '/Library/Keychains']
+
+def check_workspace_jail(payload, modifies_files, command):
+    warnings = []
+    text_to_check = f"{modifies_files} {command}"
+
+    # Check for sensitive system paths
+    for s in SENSITIVE_TARGETS:
+        if s in text_to_check:
+            warnings.append(f"Jail Violation: Operation targets sensitive credential path ({s})")
+
+    # Check for workspace containment if workspace root is known
+    workspaces = payload.get('workspacePaths') or []
+    if workspaces and len(workspaces) > 0:
+        ws_root = os.path.abspath(os.path.expanduser(workspaces[0]))
+        if modifies_files and modifies_files not in ['No', 'No (Read only)', 'Workspace', 'Terminal Shell']:
+            expanded_mod = os.path.abspath(os.path.expanduser(modifies_files))
+            if not expanded_mod.startswith(ws_root) and not expanded_mod.startswith('/tmp'):
+                warnings.append(f"Jail Violation: File target escapes workspace root ({modifies_files})")
+
+    return warnings
+
+def load_workspace_policy(payload):
+    workspaces = payload.get('workspacePaths') or []
+    candidate_dirs = list(workspaces)
+    cwd = payload.get('cwd') or os.getcwd()
+    candidate_dirs.append(cwd)
+
+    for d in candidate_dirs:
+        if not d:
+            continue
+        policy_path = os.path.join(os.path.expanduser(d), '.loggdin.json')
+        if os.path.exists(policy_path):
+            try:
+                with open(policy_path, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return None
+
 def send_via_socket(payload, socket_path, timeout=118):
     if not os.path.exists(socket_path):
         with open('/tmp/sentinel_hook.log', 'a') as f:
@@ -447,6 +487,28 @@ def main():
         command = extract_command(payload)
         risk = determine_risk(command, t_name)
 
+        # Production Feature: Workspace Security Policy (.loggdin.json)
+        policy = load_workspace_policy(payload)
+        if policy:
+            cmd_clean = command.strip().lower()
+            blocked = policy.get('blockedCommands') or []
+            if any(b.lower() in cmd_clean for b in blocked):
+                out = {'decision': 'deny', 'reason': 'Action blocked by repository security policy (.loggdin.json)'}
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
+
+            allowed_cmds = policy.get('allowedCommands') or []
+            if any(cmd_clean == a.lower() or cmd_clean.startswith(a.lower() + ' ') for a in allowed_cmds):
+                out = {'decision': 'allow'}
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
+
+            require_touch = policy.get('requireTouchID') or []
+            if any(t.lower() in cmd_clean for t in require_touch):
+                risk = 'high'
+
         # Check deduplication cache: if the exact same (tool, command) was approved recently, auto-allow!
         if check_recent_dedup(t_name, command):
             out = {'decision': 'allow'}
@@ -457,16 +519,22 @@ def main():
         resolved_dir = resolve_directory(payload)
         modifies_files = extract_modifies_files(payload, t_name)
 
-        # Production Feature 1: Scan for secrets in command and arguments
+        # Production Feature: Scan for secrets in command and arguments
         tool_args_str = json.dumps(payload.get('toolCall', {})) + " " + json.dumps(payload.get('tool_input', {}))
         secret_warnings = scan_for_secrets(command + " " + tool_args_str)
         if secret_warnings:
             risk = 'high'
 
-        # Production Feature 2: Extract interactive diff/payload preview
+        # Production Feature: Path-based Workspace Jail Enforcement
+        jail_warnings = check_workspace_jail(payload, modifies_files, command)
+        if jail_warnings:
+            secret_warnings.extend(jail_warnings)
+            risk = 'high'
+
+        # Production Feature: Extract interactive diff/payload preview
         diff_preview = extract_diff_preview(payload, t_name)
 
-        # Production Feature 3: Calculate blast radius
+        # Production Feature: Calculate blast radius
         blast_radius = calculate_blast_radius(payload, t_name, command)
 
         ask_data = {
