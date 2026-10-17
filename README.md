@@ -16,21 +16,6 @@
 
 ---
 
-## 📸 Screenshots & Visual Walkthrough
-
-### Liquid Glass Permission Card (Camera Notch Centered)
-When any AI agent attempts a shell command, file write, or external tool execution, **loggdin** slides down smoothly directly centered below your MacBook's camera notch:
-
-<p align="center">
-  <img src="assets/macos_flow.png" alt="macOS Menu Bar Flow & Notch Dropdown" width="850" style="border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);" />
-</p>
-
-- **Centered Directly Under Camera**: Uses precise `NSScreen.auxiliaryTopLeftArea` / `auxiliaryTopRightArea` geometry and `screen.frame.midX` centering so it never drifts left or right, anchoring right against the notch hardware.
-- **Biometric Touch ID**: Tap the Touch ID sensor on your MacBook keyboard to authorize high-risk actions instantly.
-- **Expressive Character Face**: Real-time eye-tracking follows your cursor; changes expressions dynamically (idle, thinking, worried on risky commands, pleased on approvals).
-
----
-
 ## 🌟 Universal AI Agent Compatibility
 
 Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, loggdin implements a dual-transport hook engine (sub-millisecond Unix Domain Socket + HTTP) giving every AI tool its own branded badge, theme colors, and native authorization flow:
