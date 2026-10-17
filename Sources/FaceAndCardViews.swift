@@ -739,6 +739,21 @@ struct PermissionCard: View {
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
+
+            if let warnings = model.request.secretWarnings, !warnings.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.red)
+                    Text(warnings.first ?? "Potential Secret Leak")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Color.red)
+                    Spacer()
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3.5)
+                .background(Color.red.opacity(0.18), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
         }
         .padding(11)
         .background(
@@ -752,13 +767,66 @@ struct PermissionCard: View {
     }
 
     private var details: some View {
-        VStack(spacing: 2) {
-            detailRow("Requested by", model.request.requestedBy)
-            detailRow("Directory", model.request.directory)
-            detailRow("Modifies files", model.request.modifiesFiles)
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(spacing: 2) {
+                detailRow("Requested by", model.request.requestedBy)
+                detailRow("Directory", model.request.directory)
+                detailRow("Modifies files", model.request.modifiesFiles)
+                if let blast = model.request.blastRadius, !blast.isEmpty {
+                    detailRow("Blast radius", blast)
+                }
+            }
+
+            if let warnings = model.request.secretWarnings, !warnings.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(warnings, id: \.self) { warning in
+                        HStack(spacing: 5) {
+                            Image(systemName: "shield.slash.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color.red)
+                            Text(warning)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.red)
+                        }
+                    }
+                }
+                .padding(6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            if let diff = model.request.diffPreview, !diff.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("DIFF / PAYLOAD PREVIEW")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            ForEach(Array(diff.split(separator: "\n").enumerated()), id: \.offset) { _, line in
+                                let lineStr = String(line)
+                                Text(lineStr)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(diffColor(for: lineStr))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(5)
+                    }
+                    .frame(maxHeight: 85)
+                    .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8))
+                }
+            }
         }
         .padding(.horizontal, 4)
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private func diffColor(for line: String) -> Color {
+        if line.hasPrefix("+") { return Color.green }
+        if line.hasPrefix("-") { return Color.red }
+        if line.hasPrefix("@") { return Color.cyan }
+        return Color.secondary
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {

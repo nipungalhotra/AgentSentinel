@@ -134,6 +134,9 @@ struct PermissionRequest: Identifiable, Codable {
     let requestedBy: String
     let directory: String
     let modifiesFiles: String
+    let secretWarnings: [String]?
+    let diffPreview: String?
+    let blastRadius: String?
 
     var plainCommand: String { tokens.map(\.text).joined(separator: " ") }
 
@@ -161,7 +164,10 @@ struct PermissionRequest: Identifiable, Codable {
         risk: Risk? = nil,
         requestedBy: String = "CLI",
         directory: String = "~",
-        modifiesFiles: String = "Unknown"
+        modifiesFiles: String = "Unknown",
+        secretWarnings: [String]? = nil,
+        diffPreview: String? = nil,
+        blastRadius: String? = nil
     ) {
         let parts = command.split(separator: " ").map(String.init)
         var parsedTokens: [CommandToken] = []
@@ -179,6 +185,11 @@ struct PermissionRequest: Identifiable, Codable {
             detectedRisk = .high
         } else if lower.contains("npm install") || lower.contains("npm i ") || lower.contains("pip install") || lower.contains("brew install") || lower.contains("git push") || lower.contains("git reset") {
             detectedRisk = .medium
+        }
+
+        // Elevate risk if secrets are detected
+        if let warnings = secretWarnings, !warnings.isEmpty {
+            detectedRisk = .high
         }
 
         for (i, part) in parts.enumerated() {
@@ -215,6 +226,9 @@ struct PermissionRequest: Identifiable, Codable {
         self.requestedBy = requestedBy
         self.directory = directory
         self.modifiesFiles = modifiesFiles
+        self.secretWarnings = secretWarnings
+        self.diffPreview = diffPreview
+        self.blastRadius = blastRadius
     }
 
     init(
@@ -226,7 +240,10 @@ struct PermissionRequest: Identifiable, Codable {
         risk: Risk,
         requestedBy: String,
         directory: String,
-        modifiesFiles: String
+        modifiesFiles: String,
+        secretWarnings: [String]? = nil,
+        diffPreview: String? = nil,
+        blastRadius: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -237,6 +254,9 @@ struct PermissionRequest: Identifiable, Codable {
         self.requestedBy = requestedBy
         self.directory = directory
         self.modifiesFiles = modifiesFiles
+        self.secretWarnings = secretWarnings
+        self.diffPreview = diffPreview
+        self.blastRadius = blastRadius
     }
 
     var category: PermissionCategory {

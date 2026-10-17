@@ -295,6 +295,9 @@ final class LocalIPCServer {
         let symbol = (json["symbol"] as? String) ?? pill.iconSystemName
         let dir = (json["directory"] as? String) ?? (json["cwd"] as? String) ?? "~"
         let mod = (json["modifiesFiles"] as? String) ?? "Workspace"
+        let secrets = (json["secretWarnings"] as? [String]) ?? []
+        let diff = json["diffPreview"] as? String
+        let blast = json["blastRadius"] as? String
 
         return PermissionRequest(
             title: title,
@@ -304,7 +307,10 @@ final class LocalIPCServer {
             risk: risk,
             requestedBy: pill.name,
             directory: dir,
-            modifiesFiles: mod
+            modifiesFiles: mod,
+            secretWarnings: secrets.isEmpty ? nil : secrets,
+            diffPreview: diff,
+            blastRadius: blast
         )
     }
 

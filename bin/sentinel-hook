@@ -13,6 +13,7 @@ import os
 import socket
 import urllib.request
 import urllib.error
+import re
 
 # Event name normalization mapping
 EVENT_MAP = {
@@ -237,6 +238,97 @@ def determine_risk(command, tool_name):
 
     return 'low'
 
+SECRET_PATTERNS = [
+    (r'sk-ant-[a-zA-Z0-9_\-]{30,}', 'Anthropic API Key'),
+    (r'sk-(?:proj-)?[a-zA-Z0-9_\-]{30,}', 'OpenAI API Key'),
+    (r'gh[pousr]_[a-zA-Z0-9]{36,}', 'GitHub Access Token'),
+    (r'github_pat_[a-zA-Z0-9_]{50,}', 'GitHub Personal Access Token'),
+    (r'AKIA[0-9A-Z]{16}', 'AWS Access Key ID'),
+    (r'xox[baprs]-[0-9a-zA-Z]{10,48}', 'Slack Token'),
+    (r'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----', 'Private SSH/RSA Key'),
+    (r'(?:bearer|token)\s+[a-zA-Z0-9_\-\.]{30,}', 'Bearer Token/Secret')
+]
+
+def scan_for_secrets(text):
+    if not text:
+        return []
+    warnings = []
+    text_str = str(text)
+    for pattern, name in SECRET_PATTERNS:
+        if re.search(pattern, text_str, re.IGNORECASE):
+            warnings.append(f"Secret detected: {name}")
+    return list(set(warnings))
+
+def extract_diff_preview(payload, tool_name):
+    t_lower = (tool_name or '').lower()
+    tool = payload.get('toolCall') or {}
+    args = tool.get('args') if isinstance(tool.get('args'), dict) else (payload.get('tool_input') or {})
+    if not isinstance(args, dict):
+        return None
+
+    if 'replace_file_content' in t_lower:
+        target = str(args.get('TargetContent', ''))
+        replacement = str(args.get('ReplacementContent', ''))
+        lines = []
+        for l in target.splitlines()[:6]:
+            lines.append(f"- {l}")
+        for l in replacement.splitlines()[:6]:
+            lines.append(f"+ {l}")
+        return "\n".join(lines) if lines else None
+
+    if 'multi_replace_file_content' in t_lower:
+        chunks = args.get('ReplacementChunks', [])
+        lines = []
+        for ch in chunks[:2]:
+            t = str(ch.get('TargetContent', ''))
+            r = str(ch.get('ReplacementContent', ''))
+            for l in t.splitlines()[:3]:
+                lines.append(f"- {l}")
+            for l in r.splitlines()[:3]:
+                lines.append(f"+ {l}")
+        return "\n".join(lines) if lines else None
+
+    if 'write_to_file' in t_lower:
+        content = str(args.get('CodeContent', ''))
+        lines = [f"+ {l}" for l in content.splitlines()[:8]]
+        if len(content.splitlines()) > 8:
+            lines.append(f"+ ... ({len(content.splitlines()) - 8} more lines)")
+        return "\n".join(lines) if lines else None
+
+    if tool_name == 'run_command':
+        cmd = extract_command(payload)
+        lines = cmd.splitlines()
+        if len(lines) > 1:
+            return "\n".join(lines[:8])
+
+    return None
+
+def calculate_blast_radius(payload, tool_name, command):
+    t_lower = (tool_name or '').lower()
+    cmd_lower = (command or '').lower()
+
+    if any(r in t_lower for r in ['view_file', 'grep_search', 'list_dir', 'read_url_content', 'read_resource']):
+        return "0 files (read-only)"
+
+    if 'replace_file_content' in t_lower:
+        return "1 file (in-place modification)"
+
+    if 'write_to_file' in t_lower:
+        return "1 file (create or overwrite)"
+
+    if tool_name == 'run_command':
+        if 'rm -rf' in cmd_lower or 'rm -r' in cmd_lower or 'rmdir' in cmd_lower:
+            return "Directory tree (permanent deletion)"
+        if 'git reset --hard' in cmd_lower or 'git checkout .' in cmd_lower:
+            return "All uncommitted working files"
+        if 'git push' in cmd_lower:
+            return "Remote git repository"
+        if any(pkg in cmd_lower for pkg in ['npm i', 'npm install', 'pip install', 'brew install']):
+            return "Project dependencies & lockfile"
+        return "Terminal shell execution"
+
+    return "Workspace"
+
 def send_via_socket(payload, socket_path, timeout=118):
     if not os.path.exists(socket_path):
         with open('/tmp/sentinel_hook.log', 'a') as f:
@@ -365,6 +457,18 @@ def main():
         resolved_dir = resolve_directory(payload)
         modifies_files = extract_modifies_files(payload, t_name)
 
+        # Production Feature 1: Scan for secrets in command and arguments
+        tool_args_str = json.dumps(payload.get('toolCall', {})) + " " + json.dumps(payload.get('tool_input', {}))
+        secret_warnings = scan_for_secrets(command + " " + tool_args_str)
+        if secret_warnings:
+            risk = 'high'
+
+        # Production Feature 2: Extract interactive diff/payload preview
+        diff_preview = extract_diff_preview(payload, t_name)
+
+        # Production Feature 3: Calculate blast radius
+        blast_radius = calculate_blast_radius(payload, t_name, command)
+
         ask_data = {
             'command': command,
             'title': f"Authorize {t_name}?" if agent == 'antigravity' else f"{agent.replace('-', ' ').title()} Request",
@@ -373,6 +477,9 @@ def main():
             'requestedBy': 'Antigravity IDE' if agent == 'antigravity' else agent,
             'directory': resolved_dir,
             'modifiesFiles': modifies_files,
+            'secretWarnings': secret_warnings,
+            'diffPreview': diff_preview,
+            'blastRadius': blast_radius,
             'symbol': 'sparkles' if agent == 'antigravity' else ('terminal.fill' if 'Bash' in t_name else 'pencil.and.outline'),
             'tool': t_name,
             'forcePrompt': False,
