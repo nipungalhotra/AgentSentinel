@@ -164,7 +164,90 @@ final class LocalIPCServer {
             return
         }
 
+        // Apple Shortcuts & CLI Integration: Check pending permissions (Strictly Loopback 127.0.0.1)
+        if method == "GET" && path == "/pending" {
+            if let req = PermissionPopupController.shared.currentPendingRequest() {
+                let json = """
+                {
+                    "hasPending": true,
+                    "id": "\(req.id.uuidString)",
+                    "title": "\(req.title.replacingOccurrences(of: "\"", with: "\\\""))",
+                    "subtitle": "\(req.subtitle.replacingOccurrences(of: "\"", with: "\\\""))",
+                    "command": "\(req.plainCommand.replacingOccurrences(of: "\"", with: "\\\""))",
+                    "risk": "\(req.risk.rawValue)",
+                    "requestedBy": "\(req.requestedBy.replacingOccurrences(of: "\"", with: "\\\""))"
+                }
+                """
+                sendHTTPResponse(connection: connection, status: "200 OK", json: json)
+            } else {
+                sendHTTPResponse(connection: connection, status: "200 OK", json: "{\"hasPending\": false, \"message\": \"No pending permissions\"}")
+            }
+            return
+        }
 
+        // Apple Shortcuts & CLI Integration: Submit decision (Strictly Loopback 127.0.0.1)
+        if (method == "POST" || method == "GET") && (path.hasPrefix("/decision") || path.hasPrefix("/allow") || path.hasPrefix("/deny")) {
+            var decStr = "allow"
+            var scopeStr = "once"
+            var reqId: String? = nil
+
+            if path.hasPrefix("/deny") {
+                decStr = "deny"
+            } else if path.hasPrefix("/allow") {
+                decStr = "allow"
+                if path.contains("scope=10m") { scopeStr = "10m" }
+                else if path.contains("scope=always") { scopeStr = "always" }
+            }
+
+            if let bodyRange = raw.range(of: "\r\n\r\n") {
+                let bodyString = String(raw[bodyRange.upperBound...])
+                if let data = bodyString.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let d = json["decision"] as? String { decStr = d.lowercased() }
+                    if let s = json["scope"] as? String { scopeStr = s.lowercased() }
+                    if let r = json["requestId"] as? String { reqId = r }
+                }
+            }
+
+            let decision: Decision
+            if decStr == "allow" {
+                let scope: AllowScope
+                switch scopeStr {
+                case "10m", "tenminutes", "10_minutes":
+                    scope = .tenMinutes
+                case "always":
+                    scope = .always
+                default:
+                    scope = .once
+                }
+                decision = .allow(scope)
+            } else {
+                decision = .deny
+            }
+
+            let handled = PermissionPopupController.shared.submitExternalDecision(decision, forRequestId: reqId)
+            let resp = "{\"success\": \(handled), \"decision\": \"\(decStr)\", \"scope\": \"\(scopeStr)\"}"
+            sendHTTPResponse(connection: connection, status: "200 OK", json: resp)
+            return
+        }
+
+        // Sound Preferences: Query or set notification sound
+        if path.hasPrefix("/sound") {
+            if method == "POST" {
+                if let bodyRange = raw.range(of: "\r\n\r\n") {
+                    let bodyString = String(raw[bodyRange.upperBound...])
+                    if let data = bodyString.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let sound = json["sound"] as? String {
+                        SoundEngine.shared.popupSoundName = sound
+                        SoundEngine.shared.playPopup()
+                    }
+                }
+            }
+            let cur = SoundEngine.shared.popupSoundName
+            sendHTTPResponse(connection: connection, status: "200 OK", json: "{\"currentSound\": \"\(cur)\", \"available\": [\"Glass\", \"Ping\", \"Bottle\", \"Pop\", \"Hero\", \"Morse\", \"Purr\"]}")
+            return
+        }
 
         if method == "POST" && (path == "/ask" || path == "/hook") {
             if let bodyRange = raw.range(of: "\r\n\r\n") {

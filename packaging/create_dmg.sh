@@ -30,6 +30,7 @@ fi
 
 cp "$BUILD_DIR/loggdin" "$APP_BUNDLE/Contents/MacOS/loggdin"
 chmod +x "$APP_BUNDLE/Contents/MacOS/loggdin"
+cp "$PROJECT_ROOT/Loggdin.app/Contents/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 
 echo "💿 [3/4] Generating disk image (.dmg)..."
 TMP_DMG_DIR="$(mktemp -d -t loggdin_dmg)"

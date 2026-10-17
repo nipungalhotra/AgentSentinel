@@ -68,11 +68,10 @@ final class SentinelManager: NSObject {
             return autoDecision
         }
 
-        // 2. Deliver System Notification & Trigger Notch Popup
+        // 2. Trigger Notch Popup (No redundant system notification banner)
         pendingCount += 1
         updateMenuBar()
 
-        deliverSystemNotification(for: activeRequest)
         WebhookManager.shared.notifyPending(activeRequest)
 
         let decision = await PermissionPopupController.shared.ask(activeRequest)
@@ -93,17 +92,6 @@ final class SentinelManager: NSObject {
 
         return decision
     }
-
-    private func deliverSystemNotification(for request: PermissionRequest) {
-        let notif = NSUserNotification()
-        notif.title = request.title
-        notif.subtitle = "\(request.requestedBy) • \(request.risk.label) Risk"
-        notif.informativeText = request.plainCommand
-        notif.soundName = nil // Silent notification banner; SoundEngine handles the elegant notch chime
-        NSUserNotificationCenter.default.deliver(notif)
-    }
-
-    // MARK: - Menu Bar Setup
 
     private func setupMenuBar() {
         if statusItem == nil {

@@ -464,21 +464,31 @@ def main():
     with open('/tmp/sentinel_hook.log', 'a') as f:
         f.write(f"EVENT: {event}, keys={list(payload.keys())}, tool_name={payload.get('tool_name')}, toolCall={payload.get('toolCall')}\n")
 
-    # AskUserQuestion mode
-    if is_ask_mode or payload.get('tool_name') == 'AskUserQuestion':
-        payload['coucou_kind'] = 'ask_user_question'
-        event = 'PermissionRequest'
+    # Interactive question tools (AskUserQuestion, ask_question, etc.) are designed for direct user interaction in the host app.
+    # Auto-allow immediately so the native IDE/terminal input modal appears seamlessly with full keyboard focus.
+    t_name = payload.get('tool_name') or payload.get('toolCall', {}).get('name') or ''
+    t_name_lower = t_name.lower()
+    interactive_question_tools = {
+        'askuserquestion', 'ask_question', 'ask_user', 'question',
+        'prompt_user', 'confirm', 'user_input', 'input', 'interactive_prompt'
+    }
+    if t_name_lower in interactive_question_tools or 'question' in t_name_lower:
+        if agent == 'antigravity':
+            out = {'decision': 'allow'}
+        else:
+            out = {'hookSpecificOutput': {'hookEventName': 'PermissionRequest', 'decision': {'behavior': 'allow'}}}
+        sys.stdout.write(json.dumps(out) + '\n')
+        sys.stdout.flush()
+        sys.exit(0)
 
     socket_path = os.path.expanduser('~/Library/Application Support/AgentSentinel/sentinel.sock')
 
     # If event is PermissionRequest or PreToolUse requiring gating:
     if event == 'PermissionRequest' or (agent == 'antigravity' and event == 'PreToolUse'):
-        t_name = payload.get('tool_name', 'Tool')
-
-        # For Antigravity IDE: safe read-only operations do not require biometric confirmation
+        # For Antigravity IDE: safe read-only operations do not require confirmation
         safe_read_tools = {
             'view_file', 'list_dir', 'grep_search', 'read_url_content',
-            'read_resource', 'list_resources'
+            'read_resource', 'list_resources', 'schedule', 'manage_task'
         }
         if agent == 'antigravity' and t_name in safe_read_tools:
             out = {'decision': 'allow'}

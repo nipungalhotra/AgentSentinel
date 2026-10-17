@@ -153,6 +153,61 @@ cmd_test() {
   echo ""
 }
 
+cmd_pending() {
+  ensure_daemon
+  PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.argv[1])
+    if d.get('hasPending'):
+        print(f\"⚠️  Pending Permission Request ({d.get('id')})\")
+        print(f\"   Agent:   {d.get('requestedBy')} ({d.get('tool')})\")
+        print(f\"   Risk:    {d.get('risk')}\")
+        print(f\"   Action:  {d.get('command')}\")
+    else:
+        print(\"✓ No permissions currently pending.\")
+except Exception as e:
+    print(sys.argv[1])
+" "$PENDING"
+}
+
+cmd_allow() {
+  ensure_daemon
+  SCOPE="${1:-once}"
+  case "$SCOPE" in
+    10m|10min|10minutes) SCOPE="10m" ;;
+    always|all) SCOPE="always" ;;
+    *) SCOPE="once" ;;
+  esac
+  RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/decision" \
+    -H "Content-Type: application/json" \
+    -d "{\"decision\":\"allow\",\"scope\":\"$SCOPE\"}")
+  echo "✓ Approved permission (Scope: $SCOPE)"
+}
+
+cmd_deny() {
+  ensure_daemon
+  RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/decision" \
+    -H "Content-Type: application/json" \
+    -d "{\"decision\":\"deny\"}")
+  echo "❌ Denied permission."
+}
+
+cmd_sound() {
+  ensure_daemon
+  SOUND_NAME="$1"
+  if [ -n "$SOUND_NAME" ]; then
+    RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/sound" \
+      -H "Content-Type: application/json" \
+      -d "{\"sound\":\"$SOUND_NAME\"}")
+    echo "🔔 Sound set to: $SOUND_NAME"
+  else
+    curl -s "http://127.0.0.1:$PORT/sound"
+    echo ""
+  fi
+}
+
 # Main command router
 case "$1" in
   mcp)
@@ -161,6 +216,20 @@ case "$1" in
   run)
     shift
     cmd_run "$@"
+    ;;
+  pending)
+    cmd_pending
+    ;;
+  allow)
+    shift
+    cmd_allow "$@"
+    ;;
+  deny)
+    cmd_deny
+    ;;
+  sound)
+    shift
+    cmd_sound "$@"
     ;;
   status)
     cmd_status
@@ -173,14 +242,18 @@ case "$1" in
     "$ROOT_DIR/bin/sentinel" install "$2"
     ;;
   help|--help|-h|"")
-    echo "loggdin Universal CLI (Coucou-parity)"
+    echo "loggdin Universal CLI (Apple Shortcuts & Agent Guard)"
     echo ""
     echo "Usage:"
-    echo "  loggdin run <command>       Guards a command with the Liquid Glass notch popup"
-    echo "  loggdin test <agent>        Tests live notch popup (antigravity, claude, codex, cursor, cowork)"
-    echo "  loggdin mcp                 Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
-    echo "  loggdin status              Displays daemon status"
-    echo "  loggdin install <target>    Installs integration (antigravity, claude, cursor, codex, zsh, all)"
+    echo "  loggdin allow [once|10m|always]  Approves active permission request (ideal for Apple Shortcuts)"
+    echo "  loggdin deny                     Denies active permission request"
+    echo "  loggdin pending                  Shows currently pending permission prompt"
+    echo "  loggdin sound [Glass|Ping|Pop]   Gets or sets the notification sound"
+    echo "  loggdin run <command>            Guards a command with the Liquid Glass notch popup"
+    echo "  loggdin test <agent>             Tests live notch popup (antigravity, claude, codex, cursor, cowork)"
+    echo "  loggdin mcp                      Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
+    echo "  loggdin status                   Displays daemon status"
+    echo "  loggdin install <target>         Installs integration (antigravity, claude, cursor, codex, zsh, all)"
     ;;
   *)
     cmd_run "$@"
