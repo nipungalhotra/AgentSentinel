@@ -18,7 +18,7 @@
 
 ## 📸 Screenshots & Visual Walkthrough
 
-### 1. Liquid Glass Permission Card (Camera Notch Centered)
+### Liquid Glass Permission Card (Camera Notch Centered)
 When any AI agent attempts a shell command, file write, or external tool execution, **loggdin** slides down smoothly directly centered below your MacBook's camera notch:
 
 <p align="center">
@@ -28,19 +28,6 @@ When any AI agent attempts a shell command, file write, or external tool executi
 - **Centered Directly Under Camera**: Uses precise `NSScreen.auxiliaryTopLeftArea` / `auxiliaryTopRightArea` geometry and `screen.frame.midX` centering so it never drifts left or right, anchoring right against the notch hardware.
 - **Biometric Touch ID**: Tap the Touch ID sensor on your MacBook keyboard to authorize high-risk actions instantly.
 - **Expressive Character Face**: Real-time eye-tracking follows your cursor; changes expressions dynamically (idle, thinking, worried on risky commands, pleased on approvals).
-
----
-
-### 2. Full Management Dashboard & Audit Ledger
-Manage active grants, connected agents, and inspect cryptographic Merkle audit records at a glance:
-
-<p align="center">
-  <img src="assets/dashboard_overview.png" alt="loggdin Management Dashboard & Merkle Audit Trail" width="850" style="border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);" />
-</p>
-
-- **Agent Integrations Hub**: 1-click status and installer for Claude Code, Antigravity IDE, Cursor, Codex CLI, Cowork, and Terminal shells.
-- **Cryptographic Audit Ledger**: Tamper-evident Merkle-tree logging of every single decision with hash verification (`/audit/verify`).
-- **Active Grants & Rules**: Live countdown timers for 10-minute temporary grants and one-click revocation of permanent rules.
 
 ---
 
