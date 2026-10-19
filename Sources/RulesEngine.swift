@@ -66,6 +66,116 @@ final class RulesEngine {
         return false
     }
 
+    func toolFamily(for command: String) -> String {
+        let clean = command.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Extract last significant command in compound shell pipelines (e.g. "cd foo && git diff")
+        let subcmds = clean.components(separatedBy: "&&")
+            .flatMap { $0.components(separatedBy: ";") }
+            .flatMap { $0.components(separatedBy: "||") }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let target = subcmds.last ?? clean
+        let parts = target.split(separator: " ").map(String.init)
+        guard let first = parts.first?.lowercased() else { return clean }
+
+        let effectiveFirst: String
+        if (first == "sudo" || first == "env") && parts.count > 1 {
+            effectiveFirst = parts[1].lowercased()
+        } else {
+            effectiveFirst = first
+        }
+
+        if effectiveFirst == "write" || effectiveFirst == "edit" || effectiveFirst == "inspect" || effectiveFirst == "modify" {
+            return "file_mod"
+        }
+
+        let knownTools = [
+            "git", "npm", "npx", "yarn", "pnpm", "bun",
+            "cargo", "rustc", "swift", "xcodebuild",
+            "python", "python3", "pytest", "pip", "pip3", "poetry", "uv",
+            "docker", "docker-compose", "podman",
+            "brew", "curl", "wget", "gh", "terraform", "go", "make", "cmake", "ctest",
+            "node", "deno", "ts-node", "tsc", "eslint", "prettier"
+        ]
+
+        if knownTools.contains(effectiveFirst) {
+            return effectiveFirst
+        }
+
+        return effectiveFirst
+    }
+
+    func isFileModification(command: String, category: PermissionCategory) -> Bool {
+        if category == .readFile { return false }
+        let lower = command.lowercased()
+        return lower.hasPrefix("write ") || lower.hasPrefix("edit ") || lower.hasPrefix("modify ") ||
+               lower.contains("replace_file_content") || lower.contains("write_to_file")
+    }
+
+    private func matchesGrant(grant: ActiveGrant, command: String, family: String, isFileMod: Bool, requestDir: String) -> Bool {
+        let cleanCmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. Direct or prefix command match
+        if cleanCmd == grant.commandPrefix || cleanCmd.hasPrefix(grant.commandPrefix) {
+            return true
+        }
+
+        // 2. Tool family match (e.g. grant for "git" allows "git status", "git diff", "git commit")
+        if let gFamily = grant.toolFamily, !gFamily.isEmpty, gFamily == family {
+            return true
+        }
+        if grant.commandPrefix == family {
+            return true
+        }
+
+        // 3. File modifications across agents (Antigravity "Write", Claude Code "Edit", Codex "Edit")
+        if isFileMod && (grant.commandPrefix == "file_mod" || grant.toolFamily == "file_mod" || grant.commandPrefix == "Edit" || grant.commandPrefix == "Write") {
+            let reqExp = (requestDir as NSString).expandingTildeInPath
+            let grantExp = (grant.directory as NSString).expandingTildeInPath
+            if grant.directory == "*" || reqExp.hasPrefix(grantExp) || grantExp.hasPrefix(reqExp) {
+                return true
+            }
+        }
+
+        // 4. Workspace match
+        if grant.commandPrefix == "workspace" || grant.toolFamily == "workspace" {
+            let reqExp = (requestDir as NSString).expandingTildeInPath
+            let grantExp = (grant.directory as NSString).expandingTildeInPath
+            if grant.directory == "*" || reqExp.hasPrefix(grantExp) || grantExp.hasPrefix(reqExp) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func matchesRule(rule: StoredRule, command: String, family: String, isFileMod: Bool, requestDir: String) -> Bool {
+        let cleanCmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if cleanCmd == rule.pattern || cleanCmd.hasPrefix(rule.pattern) {
+            return true
+        }
+
+        if let rFamily = rule.toolFamily, !rFamily.isEmpty, rFamily == family {
+            return true
+        }
+        if rule.pattern == family {
+            return true
+        }
+
+        if isFileMod && (rule.pattern == "file_mod" || rule.toolFamily == "file_mod" || rule.pattern == "Edit" || rule.pattern == "Write") {
+            let reqExp = (requestDir as NSString).expandingTildeInPath
+            let ruleExp = (rule.directory as NSString).expandingTildeInPath
+            if rule.directory == "*" || reqExp.hasPrefix(ruleExp) || ruleExp.hasPrefix(reqExp) {
+                return true
+            }
+        }
+
+        return false
+    }
+
     func evaluate(request: PermissionRequest) -> Decision? {
         cleanupExpired()
 
@@ -82,17 +192,21 @@ final class RulesEngine {
             return nil
         }
 
+        let family = toolFamily(for: cmd)
+        let isFile = isFileModification(command: cmd, category: request.category)
+
         // 1. Check active temporary grants (10 min)
-        if activeGrants.contains(where: {
-            !$0.isExpired && (cmd.hasPrefix($0.commandPrefix) || cmd == $0.commandPrefix)
+        if activeGrants.contains(where: { grant in
+            guard !grant.isExpired else { return false }
+            return matchesGrant(grant: grant, command: cmd, family: family, isFileMod: isFile, requestDir: request.directory)
         }) {
             recordDecision(request: request, decision: .allow(.tenMinutes), autoAllowed: true)
             return .allow(.tenMinutes)
         }
 
         // 2. Check persistent rules
-        if storedRules.contains(where: {
-            cmd.hasPrefix($0.pattern) || cmd == $0.pattern
+        if storedRules.contains(where: { rule in
+            return matchesRule(rule: rule, command: cmd, family: family, isFileMod: isFile, requestDir: request.directory)
         }) {
             recordDecision(request: request, decision: .allow(.always), autoAllowed: true)
             return .allow(.always)
@@ -127,22 +241,27 @@ final class RulesEngine {
         }
 
         if !autoAllowed {
+            let family = toolFamily(for: request.plainCommand)
+            let isFile = isFileModification(command: request.plainCommand, category: request.category)
+            let effectivePrefix = isFile ? "file_mod" : family
+
             switch decision {
             case .allow(.tenMinutes):
-                let prefix = commandBase(for: request.plainCommand)
                 let grant = ActiveGrant(
-                    commandPrefix: prefix,
+                    commandPrefix: effectivePrefix,
                     directory: request.directory,
-                    expiresAt: Date().addingTimeInterval(600)
+                    expiresAt: Date().addingTimeInterval(600),
+                    agent: request.requestedBy,
+                    toolFamily: effectivePrefix
                 )
                 activeGrants.append(grant)
             case .allow(.always):
-                let prefix = commandBase(for: request.plainCommand)
                 let rule = StoredRule(
-                    pattern: prefix,
+                    pattern: effectivePrefix,
                     directory: request.directory,
                     createdAt: Date(),
-                    notes: "Saved rule from \(request.requestedBy)"
+                    notes: "Saved rule from \(request.requestedBy) for \(effectivePrefix)",
+                    toolFamily: effectivePrefix
                 )
                 storedRules.append(rule)
             default:

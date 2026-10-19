@@ -338,6 +338,48 @@ struct ActiveGrant: Identifiable, Codable {
     let commandPrefix: String
     let directory: String
     let expiresAt: Date
+    var agent: String? = nil
+    var toolFamily: String? = nil
+
+    init(
+        id: UUID = UUID(),
+        commandPrefix: String,
+        directory: String,
+        expiresAt: Date,
+        agent: String? = nil,
+        toolFamily: String? = nil
+    ) {
+        self.id = id
+        self.commandPrefix = commandPrefix
+        self.directory = directory
+        self.expiresAt = expiresAt
+        self.agent = agent
+        self.toolFamily = toolFamily
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, commandPrefix, directory, expiresAt, agent, toolFamily
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.commandPrefix = try c.decode(String.self, forKey: .commandPrefix)
+        self.directory = try c.decode(String.self, forKey: .directory)
+        self.expiresAt = try c.decode(Date.self, forKey: .expiresAt)
+        self.agent = try c.decodeIfPresent(String.self, forKey: .agent)
+        self.toolFamily = try c.decodeIfPresent(String.self, forKey: .toolFamily)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(commandPrefix, forKey: .commandPrefix)
+        try c.encode(directory, forKey: .directory)
+        try c.encode(expiresAt, forKey: .expiresAt)
+        try c.encodeIfPresent(agent, forKey: .agent)
+        try c.encodeIfPresent(toolFamily, forKey: .toolFamily)
+    }
 
     var isExpired: Bool {
         Date() > expiresAt
@@ -361,6 +403,47 @@ struct StoredRule: Identifiable, Codable {
     let directory: String
     let createdAt: Date
     let notes: String
+    var toolFamily: String? = nil
+
+    init(
+        id: UUID = UUID(),
+        pattern: String,
+        directory: String,
+        createdAt: Date = Date(),
+        notes: String = "",
+        toolFamily: String? = nil
+    ) {
+        self.id = id
+        self.pattern = pattern
+        self.directory = directory
+        self.createdAt = createdAt
+        self.notes = notes
+        self.toolFamily = toolFamily
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, pattern, directory, createdAt, notes, toolFamily
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.pattern = try c.decode(String.self, forKey: .pattern)
+        self.directory = try c.decode(String.self, forKey: .directory)
+        self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        self.notes = try c.decode(String.self, forKey: .notes)
+        self.toolFamily = try c.decodeIfPresent(String.self, forKey: .toolFamily)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(pattern, forKey: .pattern)
+        try c.encode(directory, forKey: .directory)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(notes, forKey: .notes)
+        try c.encodeIfPresent(toolFamily, forKey: .toolFamily)
+    }
 }
 
 // MARK: - Audit Log Entry

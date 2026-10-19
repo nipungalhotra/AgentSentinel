@@ -119,7 +119,7 @@ final class HookInstaller {
             ("SessionStart", 10),
             ("SessionEnd", 10),
             ("UserPromptSubmit", 10),
-            ("PreToolUse", 10),
+            ("PreToolUse", 120),
             ("PostToolUse", 10),
             ("PostToolUseFailure", 10),
             ("PermissionRequest", 120),
@@ -287,7 +287,7 @@ final class HookInstaller {
         let events: [(String, Int, String?)] = [
             ("SessionStart", 10, nil),
             ("UserPromptSubmit", 10, nil),
-            ("PreToolUse", 10, nil),
+            ("PreToolUse", 120, "Waiting for permission in the notch (Agent Sentinel)"),
             ("PermissionRequest", 120, "Waiting for permission in the notch (Agent Sentinel)"),
             ("PostToolUse", 10, nil),
             ("Stop", 10, nil),
@@ -410,7 +410,7 @@ final class HookInstaller {
         let config: [String: Any] = [
             "hooks": [
                 "permissionRequest": [["bash": "\(baseCmd) PermissionRequest", "timeoutSec": 120]],
-                "preToolUse": [["bash": "\(baseCmd) PreToolUse", "timeoutSec": 10]],
+                "preToolUse": [["bash": "\(baseCmd) PreToolUse", "timeoutSec": 120]],
                 "postToolUse": [["bash": "\(baseCmd) PostToolUse", "timeoutSec": 10]],
                 "sessionStart": [["bash": "\(baseCmd) SessionStart", "timeoutSec": 10]],
                 "sessionEnd": [["bash": "\(baseCmd) SessionEnd", "timeoutSec": 10]]

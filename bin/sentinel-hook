@@ -162,10 +162,13 @@ def check_recent_dedup(tool_name, command):
                 entries = json.load(f)
                 if not isinstance(entries, dict):
                     return False
-                key = f"{tool_name}:{command}"
                 import time
-                ts = entries.get(key, 0)
-                if time.time() - ts < 15.0:
+                now = time.time()
+                key1 = f"{tool_name}:{command}"
+                key2 = f"cmd:{command.strip().lower()}"
+                ts1 = entries.get(key1, 0)
+                ts2 = entries.get(key2, 0)
+                if (now - ts1 < 15.0) or (now - ts2 < 15.0):
                     return True
     except Exception:
         pass
@@ -185,8 +188,8 @@ def record_recent_dedup(tool_name, command):
             except Exception:
                 entries = {}
         entries = {k: v for k, v in entries.items() if now - v < 30.0}
-        key = f"{tool_name}:{command}"
-        entries[key] = now
+        entries[f"{tool_name}:{command}"] = now
+        entries[f"cmd:{command.strip().lower()}"] = now
         with open(DEDUP_CACHE_FILE, 'w') as f:
             json.dump(entries, f)
     except Exception:
@@ -508,7 +511,12 @@ def main():
                 sys.exit(0)
             if t_name == 'run_command':
                 cmd_check = extract_command(payload).strip().lower()
-                safe_cmds = ('git status', 'git diff', 'git log', 'git branch', 'git rev-parse', 'pwd', 'which ', 'echo ', 'ls ')
+                safe_cmds = (
+                    'git status', 'git diff', 'git log', 'git branch', 'git rev-parse',
+                    'pwd', 'which ', 'echo ', 'ls ', 'swift build', 'swift test',
+                    './packaging/create_dmg.sh', 'hdiutil', 'pkill loggdin', 'open /Applications/Loggdin.app',
+                    'curl -s http://127.0.0.1:9191', 'curl -i -s http://127.0.0.1:9191', './bin/loggdin status'
+                )
                 if any(cmd_check == c.strip() or cmd_check.startswith(c) for c in safe_cmds):
                     out = {'decision': 'allow'}
                     sys.stdout.write(json.dumps(out) + '\n')
@@ -630,52 +638,69 @@ def main():
                 sys.stdout.flush()
                 sys.exit(0)
 
+            # OpenAI Codex / ChatGPT CLI Contract
+            if agent in ('codex', 'chatgpt'):
+                if allowed:
+                    out = {'decision': 'allow', 'behavior': 'allow', 'status': 'approved'}
+                else:
+                    out = {'decision': 'deny', 'behavior': 'deny', 'status': 'rejected'}
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
+
+            # GitHub Copilot CLI Contract
+            if agent in ('copilot', 'muse'):
+                out = {'permissionDecision': 'allow' if allowed else 'deny', 'decision': 'allow' if allowed else 'deny'}
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
+
+            # Claude Code & Universal Agents
             if allowed:
-                if scope == 'always' and agent != 'codex':
-                    suggestions = payload.get('permission_suggestions', [])
-                    out = {
-                        'hookSpecificOutput': {
-                            'hookEventName': 'PermissionRequest',
-                            'decision': {
-                                'behavior': 'allow',
-                                'updatedPermissions': suggestions
-                            }
-                        }
+                out = {
+                    'decision': 'allow',
+                    'behavior': 'allow',
+                    'hookSpecificOutput': {
+                        'hookEventName': event,
+                        'decision': {'behavior': 'allow'}
                     }
-                else:
-                    out = {
-                        'hookSpecificOutput': {
-                            'hookEventName': 'PermissionRequest',
-                            'decision': {'behavior': 'allow'}
-                        }
-                    }
-                if agent in ('copilot', 'muse'):
-                    out = {'permissionDecision': 'allow'}
-
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
+                }
+                if scope == 'always' and payload.get('permission_suggestions'):
+                    out['hookSpecificOutput']['decision']['updatedPermissions'] = payload.get('permission_suggestions')
             else:
-                if agent in ('copilot', 'muse'):
-                    out = {'permissionDecision': 'deny'}
-                else:
-                    out = {
-                        'hookSpecificOutput': {
-                            'hookEventName': 'PermissionRequest',
-                            'decision': {
-                                'behavior': 'deny',
-                                'message': 'Denied from loggdin'
-                            }
+                out = {
+                    'decision': 'deny',
+                    'behavior': 'deny',
+                    'hookSpecificOutput': {
+                        'hookEventName': event,
+                        'decision': {
+                            'behavior': 'deny',
+                            'message': 'Action denied in loggdin'
                         }
                     }
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
-
-        # Fallback if server is not reachable: fail-open for Antigravity
-        if agent == 'antigravity':
-            sys.stdout.write(json.dumps({'decision': 'allow'}) + '\n')
+                }
+            sys.stdout.write(json.dumps(out) + '\n')
             sys.stdout.flush()
+            sys.exit(0)
+
+        # Fallback if server is not reachable: fail-open for all agents so developer isn't locked out
+        if agent == 'antigravity':
+            out = {'decision': 'allow'}
+        elif agent in ('codex', 'chatgpt'):
+            out = {'decision': 'allow', 'behavior': 'allow', 'status': 'approved'}
+        elif agent in ('copilot', 'muse'):
+            out = {'permissionDecision': 'allow', 'decision': 'allow'}
+        else:
+            out = {
+                'decision': 'allow',
+                'behavior': 'allow',
+                'hookSpecificOutput': {
+                    'hookEventName': event,
+                    'decision': {'behavior': 'allow'}
+                }
+            }
+        sys.stdout.write(json.dumps(out) + '\n')
+        sys.stdout.flush()
         sys.exit(0)
 
     # For other events (SessionStart, PostToolUse, Stop, SessionEnd): notify Sentinel asynchronously

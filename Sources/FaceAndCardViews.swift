@@ -1110,6 +1110,11 @@ final class PermissionPopupController {
     }
 
     func ask(_ request: PermissionRequest) async -> Decision {
+        // 0. Immediate evaluation: if rules engine already allows this, return immediately without queueing
+        if let autoDecision = RulesEngine.shared.evaluate(request: request) {
+            return autoDecision
+        }
+
         let cleanCmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 1. If currently displaying the EXACT same command on screen, piggyback on it
@@ -1136,6 +1141,19 @@ final class PermissionPopupController {
     }
 
     private func pump() {
+        // Auto-resolve any queued entries that now evaluate to an auto-decision with new grants
+        var unhandled: [PendingEntry] = []
+        for item in queue {
+            if let auto = RulesEngine.shared.evaluate(request: item.request) {
+                for c in item.continuations {
+                    c.resume(returning: auto)
+                }
+            } else {
+                unhandled.append(item)
+            }
+        }
+        queue = unhandled
+
         guard !busy, !queue.isEmpty else { return }
         let entry = queue.removeFirst()
         let request = entry.request
