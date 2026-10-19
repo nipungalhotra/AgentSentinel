@@ -22,10 +22,10 @@ struct DashboardView: View {
         }
     }
 
-    @State private var selectedTab: Tab = .overview
-    @State private var manager = SentinelManager.shared
-    @State private var rules = RulesEngine.shared
-    @State private var socketCopied = false
+    @UIState private var selectedTab: Tab = .overview
+    @UIState private var manager = SentinelManager.shared
+    @UIState private var rules = RulesEngine.shared
+    @UIState private var socketCopied = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -368,7 +368,7 @@ struct DashboardView: View {
 
 struct PulsingRadarBeacon: View {
     var isGuarding: Bool
-    @State private var pulse = false
+    @UIState private var pulse = false
 
     var body: some View {
         ZStack {
@@ -400,8 +400,8 @@ struct PulsingRadarBeacon: View {
 // MARK: - Overview Tab
 
 struct OverviewTab: View {
-    @State private var manager = SentinelManager.shared
-    @State private var rules = RulesEngine.shared
+    @UIState private var manager = SentinelManager.shared
+    @UIState private var rules = RulesEngine.shared
 
     var body: some View {
         ScrollView {
@@ -664,17 +664,17 @@ struct OverviewTab: View {
 // MARK: - Agent Integrations Tab
 
 struct AgentIntegrationsTab: View {
-    @State private var allInstalled = false
-    @State private var claudeInstalled = false
-    @State private var coworkInstalled = false
-    @State private var antigravityInstalled = false
-    @State private var cursorInstalled = false
-    @State private var codexInstalled = false
-    @State private var chatgptInstalled = false
-    @State private var copilotInstalled = false
-    @State private var zshInstalled = false
-    @State private var copiedSnippet = false
-    @State private var selectedSnippet = 0
+    @UIState private var allInstalled = false
+    @UIState private var claudeInstalled = false
+    @UIState private var coworkInstalled = false
+    @UIState private var antigravityInstalled = false
+    @UIState private var cursorInstalled = false
+    @UIState private var codexInstalled = false
+    @UIState private var chatgptInstalled = false
+    @UIState private var copilotInstalled = false
+    @UIState private var zshInstalled = false
+    @UIState private var copiedSnippet = false
+    @UIState private var selectedSnippet = 0
 
     let pythonSnippet = """
 from sentinel import ask_permission, guard
@@ -1164,13 +1164,13 @@ add-zsh-hook preexec sentinel_preexec
 // MARK: - Audit Log Tab
 
 struct AuditLogTab: View {
-    @State private var rules = RulesEngine.shared
-    @State private var search: String = ""
-    @State private var filterRisk: Risk? = nil
-    @State private var copiedLogId: UUID? = nil
-    @State private var copiedHashId: UUID? = nil
-    @State private var showingIntegritySheet: Bool = false
-    @State private var exportStatusMessage: String? = nil
+    @UIState private var rules = RulesEngine.shared
+    @UIState private var search: String = ""
+    @UIState private var filterRisk: Risk? = nil
+    @UIState private var copiedLogId: UUID? = nil
+    @UIState private var copiedHashId: UUID? = nil
+    @UIState private var showingIntegritySheet: Bool = false
+    @UIState private var exportStatusMessage: String? = nil
 
     var filteredLogs: [AuditLogEntry] {
         rules.auditLogs.filter { log in
@@ -1489,9 +1489,9 @@ struct AuditLogTab: View {
 // MARK: - Rules & Grants Tab
 
 struct RulesTab: View {
-    @State private var rules = RulesEngine.shared
-    @State private var newRulePattern: String = ""
-    @State private var testResult: String? = nil
+    @UIState private var rules = RulesEngine.shared
+    @UIState private var newRulePattern: String = ""
+    @UIState private var testResult: String? = nil
 
     var body: some View {
         ScrollView {

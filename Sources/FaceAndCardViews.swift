@@ -92,8 +92,8 @@ struct FaceView: View {
     var look: CGSize
     var customColor: Color? = nil
 
-    @State private var blink = false
-    @State private var zFloat = false
+    @UIState private var blink = false
+    @UIState private var zFloat = false
     private let ink = Color(red: 0.17, green: 0.07, blue: 0.03)
 
     var body: some View {
@@ -213,7 +213,7 @@ extension View {
 
 struct SparkleBurst: View {
     let color: Color
-    @State private var fly = false
+    @UIState private var fly = false
 
     var body: some View {
         ZStack {
@@ -506,8 +506,8 @@ struct PermissionPopupRoot: View {
 struct PermissionCard: View {
     @Bindable var model: PermissionModel
     var geometry: IslandScreenGeometry? = nil
-    @State private var look: CGSize = .zero
-    @State private var copiedCommand = false
+    @UIState private var look: CGSize = .zero
+    @UIState private var copiedCommand = false
     @FocusState private var focused: Bool
 
     private let faceCenter = CGPoint(x: 44, y: 44)

@@ -8,7 +8,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BIN_PATH="/Applications/Loggdin.app/Contents/MacOS/loggdin"
+BIN_PATH="$PROJECT_ROOT/bin/loggdin"
+[ ! -f "$BIN_PATH" ] && BIN_PATH="/Applications/Loggdin.app/Contents/MacOS/loggdin"
 
 echo "⚡ [1/3] Installing 'loggdin' CLI to user PATH..."
 mkdir -p "$HOME/.local/bin"
@@ -24,21 +25,21 @@ fi
 echo "📦 [2/3] Generating 1-click desktop launchers in shortcuts/..."
 cat << 'EOF' > "$SCRIPT_DIR/Approve-10m.command"
 #!/usr/bin/env bash
-/Applications/Loggdin.app/Contents/MacOS/loggdin allow 10m
+open "loggdin://allow?scope=10m" 2>/dev/null || "$HOME/.local/bin/loggdin" allow 10m
 osascript -e 'display notification "Approved action for 10 minutes" with title "loggdin Approved" sound name "Glass"'
 EOF
 chmod +x "$SCRIPT_DIR/Approve-10m.command"
 
 cat << 'EOF' > "$SCRIPT_DIR/Approve-Once.command"
 #!/usr/bin/env bash
-/Applications/Loggdin.app/Contents/MacOS/loggdin allow once
+open "loggdin://allow?scope=once" 2>/dev/null || "$HOME/.local/bin/loggdin" allow once
 osascript -e 'display notification "Approved action once" with title "loggdin Approved" sound name "Glass"'
 EOF
 chmod +x "$SCRIPT_DIR/Approve-Once.command"
 
 cat << 'EOF' > "$SCRIPT_DIR/Deny.command"
 #!/usr/bin/env bash
-/Applications/Loggdin.app/Contents/MacOS/loggdin deny
+open "loggdin://deny" 2>/dev/null || "$HOME/.local/bin/loggdin" deny
 osascript -e 'display notification "Denied permission request" with title "loggdin Denied" sound name "Purr"'
 EOF
 chmod +x "$SCRIPT_DIR/Deny.command"

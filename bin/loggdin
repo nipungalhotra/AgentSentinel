@@ -14,6 +14,14 @@ MCP_SERVER="$ROOT_DIR/bin/sentinel-mcp.js"
 HOOK_SCRIPT="$HOME/Library/Application Support/AgentSentinel/sentinel-hook"
 PORT=9191
 
+get_token() {
+  if [ -f "$HOME/.loggdin/token" ]; then
+    cat "$HOME/.loggdin/token"
+  elif [ -f "$HOME/Library/Application Support/AgentSentinel/token" ]; then
+    cat "$HOME/Library/Application Support/AgentSentinel/token"
+  fi
+}
+
 ensure_daemon() {
   if ! curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
     echo "🛡️ Starting loggdin daemon..."
@@ -76,6 +84,7 @@ print(json.dumps(data))
 
   RESPONSE=$(curl -s -X POST "http://127.0.0.1:$PORT/ask" \
     -H "Content-Type: application/json" \
+    -H "X-Loggdin-Token: $(get_token)" \
     -d "$PAYLOAD")
 
   ALLOWED=$(python3 -c "
@@ -205,19 +214,32 @@ try:
     choice = input('Choice [1/2/3/q]: ').strip().lower()
     port = '9191'
     
+    token_val = ''
+    try:
+        import os
+        tp = os.path.expanduser('~/.loggdin/token')
+        if not os.path.exists(tp):
+            tp = os.path.expanduser('~/Library/Application Support/AgentSentinel/token')
+        if os.path.exists(tp):
+            with open(tp) as f: token_val = f.read().strip()
+    except Exception:
+        pass
+
+    auth_h = ['-H', f'X-Loggdin-Token: {token_val}'] if token_val else []
+
     if choice == '1':
         subprocess.run(['curl', '-s', '-X', 'POST', f'http://127.0.0.1:{port}/decision', 
-                       '-H', 'Content-Type: application/json', 
+                       '-H', 'Content-Type: application/json'] + auth_h + [
                        '-d', '{\"decision\":\"allow\",\"scope\":\"10m\"}'])
         print('✅ Approved for 10 minutes.')
     elif choice == '2':
         subprocess.run(['curl', '-s', '-X', 'POST', f'http://127.0.0.1:{port}/decision', 
-                       '-H', 'Content-Type: application/json', 
+                       '-H', 'Content-Type: application/json'] + auth_h + [
                        '-d', '{\"decision\":\"allow\",\"scope\":\"once\"}'])
         print('✅ Approved once.')
     elif choice == '3':
         subprocess.run(['curl', '-s', '-X', 'POST', f'http://127.0.0.1:{port}/decision', 
-                       '-H', 'Content-Type: application/json', 
+                       '-H', 'Content-Type: application/json'] + auth_h + [
                        '-d', '{\"decision\":\"deny\"}'])
         print('❌ Denied permission.')
     else:
@@ -237,6 +259,7 @@ cmd_allow() {
   esac
   RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/decision" \
     -H "Content-Type: application/json" \
+    -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"decision\":\"allow\",\"scope\":\"$SCOPE\"}")
   echo "✓ Approved permission (Scope: $SCOPE)"
 }
@@ -245,6 +268,7 @@ cmd_deny() {
   ensure_daemon
   RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/decision" \
     -H "Content-Type: application/json" \
+    -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"decision\":\"deny\"}")
   echo "❌ Denied permission."
 }
@@ -255,6 +279,7 @@ cmd_sound() {
   if [ -n "$SOUND_NAME" ]; then
     RESP=$(curl -s -X POST "http://127.0.0.1:$PORT/sound" \
       -H "Content-Type: application/json" \
+      -H "X-Loggdin-Token: $(get_token)" \
       -d "{\"sound\":\"$SOUND_NAME\"}")
     echo "🔔 Sound set to: $SOUND_NAME"
   else

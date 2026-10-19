@@ -20,9 +20,60 @@ final class LocalIPCServer {
         return appSupport.appendingPathComponent("sentinel.sock").path
     }
 
+    var tokenPath: String {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("AgentSentinel", isDirectory: true)
+        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        return appSupport.appendingPathComponent("token").path
+    }
+
+    private(set) var authToken: String = ""
+
+    func initializeAuthToken() {
+        let path = tokenPath
+        if let existing = try? String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !existing.isEmpty {
+            self.authToken = existing
+        } else {
+            var bytes = [UInt8](repeating: 0, count: 32)
+            _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+            let newToken = bytes.map { String(format: "%02x", $0) }.joined()
+            try? newToken.write(toFile: path, atomically: true, encoding: .utf8)
+            chmod(path, 0o600)
+            self.authToken = newToken
+        }
+
+        // Mirror token to ~/.loggdin/token with strict 0600 permissions
+        let dotLoggdin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".loggdin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dotLoggdin, withIntermediateDirectories: true)
+        let dotToken = dotLoggdin.appendingPathComponent("token").path
+        try? self.authToken.write(toFile: dotToken, atomically: true, encoding: .utf8)
+        chmod(dotToken, 0o600)
+    }
+
+    private func isAuthorized(headers: [String: String], path: String, bodyString: String?) -> Bool {
+        guard !authToken.isEmpty else { return true }
+        if let headerToken = headers["x-loggdin-token"] ?? headers["x-sentinel-token"], headerToken == authToken {
+            return true
+        }
+        if let authHeader = headers["authorization"], authHeader.hasPrefix("Bearer ") {
+            let token = String(authHeader.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+            if token == authToken { return true }
+        }
+        if path.contains("token=\(authToken)") {
+            return true
+        }
+        if let body = bodyString, let data = body.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let bodyToken = json["token"] as? String, bodyToken == authToken {
+            return true
+        }
+        return false
+    }
+
     func start(port: UInt16 = 9191) {
         guard !isRunning else { return }
         self.port = port
+        initializeAuthToken()
         startHTTPServer(port: port)
         startUnixSocketServer()
         isRunning = true
@@ -116,8 +167,58 @@ final class LocalIPCServer {
         let method = String(parts[0])
         let path = String(parts[1])
 
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            if line.isEmpty { break }
+            let kv = line.split(separator: ":", maxSplits: 1).map(String.init)
+            if kv.count == 2 {
+                headers[kv[0].trimmingCharacters(in: .whitespaces).lowercased()] = kv[1].trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        // 1. HARDENED SECURITY: DNS Rebinding Protection
+        // Validate Host header: must strictly resolve to 127.0.0.1 or localhost
+        if let hostHeader = headers["host"] {
+            let hostPart = hostHeader.split(separator: ":").first.map(String.init)?.lowercased() ?? hostHeader.lowercased()
+            if hostPart != "127.0.0.1" && hostPart != "localhost" {
+                sendHTTPResponse(connection: connection, status: "403 Forbidden", json: "{\"error\":\"Forbidden: Invalid Host header (DNS rebinding rejected)\"}")
+                return
+            }
+        }
+
+        // 2. HARDENED SECURITY: Web-to-Localhost & Cross-Origin Request Forgery (CSRF) Protection
+        // Block any browser-originated requests with external Origin or Referer
+        if let origin = headers["origin"], !origin.isEmpty {
+            if !origin.hasPrefix("http://127.0.0.1") && !origin.hasPrefix("http://localhost") {
+                sendHTTPResponse(connection: connection, status: "403 Forbidden", json: "{\"error\":\"Forbidden: Cross-origin browser request rejected\"}")
+                return
+            }
+        }
+        if let referer = headers["referer"], !referer.isEmpty {
+            if !referer.hasPrefix("http://127.0.0.1") && !referer.hasPrefix("http://localhost") {
+                sendHTTPResponse(connection: connection, status: "403 Forbidden", json: "{\"error\":\"Forbidden: Cross-origin browser referer rejected\"}")
+                return
+            }
+        }
+
+        // Reject all cross-origin preflight requests
         if method == "OPTIONS" {
-            sendHTTPResponse(connection: connection, status: "204 No Content", json: "")
+            sendHTTPResponse(connection: connection, status: "403 Forbidden", json: "{\"error\":\"Preflight rejected\"}")
+            return
+        }
+
+        let bodyString: String? = {
+            if let bodyRange = raw.range(of: "\r\n\r\n") {
+                return String(raw[bodyRange.upperBound...])
+            }
+            return nil
+        }()
+
+        // 3. HARDENED SECURITY: Token Authorization for State-Modifying Endpoints
+        let requiresAuth = path.hasPrefix("/decision") || path.hasPrefix("/allow") || path.hasPrefix("/deny") ||
+                           path.hasPrefix("/sound") || path == "/ask" || path == "/hook"
+        if requiresAuth && !isAuthorized(headers: headers, path: path, bodyString: bodyString) {
+            sendHTTPResponse(connection: connection, status: "401 Unauthorized", json: "{\"error\":\"Unauthorized: Valid token required in X-Loggdin-Token or Authorization header\"}")
             return
         }
 
@@ -274,9 +375,9 @@ final class LocalIPCServer {
         var response = "HTTP/1.1 \(status)\r\n"
         response += "Content-Type: application/json; charset=utf-8\r\n"
         response += "Content-Length: \(bodyData.count)\r\n"
-        response += "Access-Control-Allow-Origin: *\r\n"
-        response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-        response += "Access-Control-Allow-Headers: Content-Type\r\n"
+        response += "Content-Security-Policy: default-src 'none'\r\n"
+        response += "X-Content-Type-Options: nosniff\r\n"
+        response += "X-Frame-Options: DENY\r\n"
         response += "Connection: close\r\n\r\n"
 
         var responseData = response.data(using: .utf8) ?? Data()
@@ -292,8 +393,9 @@ final class LocalIPCServer {
         var response = "HTTP/1.1 \(status)\r\n"
         response += "Content-Type: \(contentType)\r\n"
         response += "Content-Length: \(bodyData.count)\r\n"
-        response += "Access-Control-Allow-Origin: *\r\n"
-        response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+        response += "Content-Security-Policy: default-src 'none'\r\n"
+        response += "X-Content-Type-Options: nosniff\r\n"
+        response += "X-Frame-Options: DENY\r\n"
         response += "Connection: close\r\n\r\n"
 
         var responseData = response.data(using: .utf8) ?? Data()

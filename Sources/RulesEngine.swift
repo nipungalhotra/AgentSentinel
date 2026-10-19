@@ -18,12 +18,22 @@ final class RulesEngine {
     private(set) var auditLogs: [AuditLogEntry] = []
 
     private let storageDir: URL
+    private var cleanupTimer: Timer?
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         storageDir = appSupport.appendingPathComponent("AgentSentinel", isDirectory: true)
         try? FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
         loadFromDisk()
+        startPeriodicPruning()
+    }
+
+    private func startPeriodicPruning() {
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.cleanupExpired()
+            }
+        }
     }
 
     // MARK: - Evaluation
@@ -172,7 +182,11 @@ final class RulesEngine {
     }
 
     func cleanupExpired() {
+        let initialCount = activeGrants.count
         activeGrants.removeAll { $0.isExpired }
+        if activeGrants.count != initialCount {
+            saveToDisk()
+        }
     }
 
     // MARK: - Cryptographic Chain Verification

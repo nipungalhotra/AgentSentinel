@@ -404,10 +404,20 @@ def send_via_socket(payload, socket_path, timeout=118):
 def send_via_http(payload, port=9191, timeout=120):
     url = f"http://127.0.0.1:{port}/ask"
     req_body = json.dumps(payload).encode('utf-8')
+    headers = {'Content-Type': 'application/json'}
+    try:
+        token_path = os.path.expanduser('~/.loggdin/token')
+        if not os.path.exists(token_path):
+            token_path = os.path.expanduser('~/Library/Application Support/AgentSentinel/token')
+        if os.path.exists(token_path):
+            with open(token_path) as f:
+                headers['X-Loggdin-Token'] = f.read().strip()
+    except Exception:
+        pass
     req = urllib.request.Request(
         url,
         data=req_body,
-        headers={'Content-Type': 'application/json'},
+        headers=headers,
         method='POST'
     )
     try:
@@ -490,11 +500,20 @@ def main():
             'view_file', 'list_dir', 'grep_search', 'read_url_content',
             'read_resource', 'list_resources', 'schedule', 'manage_task'
         }
-        if agent == 'antigravity' and t_name in safe_read_tools:
-            out = {'decision': 'allow'}
-            sys.stdout.write(json.dumps(out) + '\n')
-            sys.stdout.flush()
-            sys.exit(0)
+        if agent == 'antigravity':
+            if t_name in safe_read_tools:
+                out = {'decision': 'allow'}
+                sys.stdout.write(json.dumps(out) + '\n')
+                sys.stdout.flush()
+                sys.exit(0)
+            if t_name == 'run_command':
+                cmd_check = extract_command(payload).strip().lower()
+                safe_cmds = ('git status', 'git diff', 'git log', 'git branch', 'git rev-parse', 'pwd', 'which ', 'echo ', 'ls ')
+                if any(cmd_check == c.strip() or cmd_check.startswith(c) for c in safe_cmds):
+                    out = {'decision': 'allow'}
+                    sys.stdout.write(json.dumps(out) + '\n')
+                    sys.stdout.flush()
+                    sys.exit(0)
 
         command = extract_command(payload)
         risk = determine_risk(command, t_name)

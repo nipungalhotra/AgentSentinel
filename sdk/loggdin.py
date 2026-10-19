@@ -42,10 +42,21 @@ def ask_permission(
 
     try:
         data = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        token_path = os.path.expanduser("~/.loggdin/token")
+        if not os.path.exists(token_path):
+            token_path = os.path.expanduser("~/Library/Application Support/AgentSentinel/token")
+        if os.path.exists(token_path):
+            try:
+                with open(token_path) as f:
+                    headers["X-Loggdin-Token"] = f.read().strip()
+            except Exception:
+                pass
+
         req = urllib.request.Request(
             LOGGDIN_URL,
             data=data,
-            headers={"Content-Type": "application/json"}
+            headers=headers
         )
         with urllib.request.urlopen(req, timeout=60) as response:
             res = json.loads(response.read().decode("utf-8"))

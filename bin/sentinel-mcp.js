@@ -8,21 +8,39 @@
 const http = require('http');
 const readline = require('readline');
 const { exec, execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const SENTINEL_PORT = process.env.SENTINEL_PORT || 9191;
+
+function getSentinelToken() {
+  try {
+    const p1 = path.join(os.homedir(), '.loggdin', 'token');
+    if (fs.existsSync(p1)) return fs.readFileSync(p1, 'utf8').trim();
+    const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'token');
+    if (fs.existsSync(p2)) return fs.readFileSync(p2, 'utf8').trim();
+  } catch {}
+  return '';
+}
 
 function requestSentinel(payload) {
   return new Promise((resolve, reject) => {
     const postData = JSON.stringify(payload);
+    const token = getSentinelToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(postData)
+    };
+    if (token) {
+      headers['X-Loggdin-Token'] = token;
+    }
     const options = {
       hostname: '127.0.0.1',
       port: SENTINEL_PORT,
       path: '/ask',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      },
+      headers: headers,
       timeout: 60000 // 60s timeout matching popup max duration
     };
 
