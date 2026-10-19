@@ -1,4 +1,7 @@
 <p align="center">
+  <img src="assets/logo.png" alt="loggdin Logo" width="130" style="border-radius: 28px; box-shadow: 0 10px 25px rgba(0,0,0,0.3);" />
+</p>
+<p align="center">
   <img src="assets/notch_card_hero.jpg" alt="loggdin • Liquid Glass Notch Security Gate" width="650" style="border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.4);" />
 </p>
 
