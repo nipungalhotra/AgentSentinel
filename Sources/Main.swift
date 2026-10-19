@@ -25,6 +25,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SentinelManager.shared.startup()
         // Dashboard is NOT opened automatically; user can open it from the menu bar if desired.
+
+        // Automatically suppress and close any default SwiftUI window created on startup
+        DispatchQueue.main.async {
+            for window in NSApplication.shared.windows {
+                if !(window is FloatingPanel) && window !== SentinelManager.shared.dashboardWindow {
+                    window.orderOut(nil)
+                    window.close()
+                }
+            }
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -86,6 +96,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Prevent opening the default Settings window on dock click or external open event
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         if lockFileDescriptor >= 0 {
             close(lockFileDescriptor)
@@ -116,7 +131,8 @@ struct AgentSentinelApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            DashboardView()
+                .frame(minWidth: 920, minHeight: 620)
         }
     }
 }

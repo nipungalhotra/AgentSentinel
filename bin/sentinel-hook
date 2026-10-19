@@ -610,7 +610,7 @@ def main():
                 for app_candidate in ['/Applications/Loggdin.app', '/Applications/AgentSentinel.app']:
                     if os.path.exists(app_candidate):
                         import subprocess, time
-                        subprocess.run(['open', '-a', app_candidate], check=False)
+                        subprocess.run(['open', '-g', '-j', '-a', app_candidate], check=False)
                         time.sleep(0.8)
                         resp = send_via_socket(ask_data, socket_path) or send_via_http(ask_data, port=int(os.environ.get('SENTINEL_PORT', 9191)))
                         break
