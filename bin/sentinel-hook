@@ -404,7 +404,31 @@ def send_via_socket(payload, socket_path, timeout=118):
         return None
     return None
 
-def send_via_http(payload, port=9191, timeout=120):
+def get_sentinel_port():
+    if os.environ.get('LOGGDIN_PORT'):
+        try:
+            return int(os.environ['LOGGDIN_PORT'])
+        except Exception:
+            pass
+    if os.environ.get('SENTINEL_PORT'):
+        try:
+            return int(os.environ['SENTINEL_PORT'])
+        except Exception:
+            pass
+    for p in [os.path.expanduser('~/.loggdin/port'), os.path.expanduser('~/Library/Application Support/AgentSentinel/port')]:
+        if os.path.exists(p):
+            try:
+                with open(p) as f:
+                    val = f.read().strip()
+                    if val:
+                        return int(val)
+            except Exception:
+                pass
+    return 9191
+
+def send_via_http(payload, port=None, timeout=120):
+    if port is None:
+        port = get_sentinel_port()
     url = f"http://127.0.0.1:{port}/ask"
     req_body = json.dumps(payload).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
@@ -600,7 +624,7 @@ def main():
         with open('/tmp/sentinel_hook.log', 'a') as f:
             f.write(f"SOCKET RESP: {resp}\n")
         if not resp:
-            resp = send_via_http(ask_data, port=int(os.environ.get('SENTINEL_PORT', 9191)))
+            resp = send_via_http(ask_data)
             with open('/tmp/sentinel_hook.log', 'a') as f:
                 f.write(f"HTTP RESP: {resp}\n")
 
@@ -612,7 +636,7 @@ def main():
                         import subprocess, time
                         subprocess.run(['open', '-g', '-j', '-a', app_candidate], check=False)
                         time.sleep(0.8)
-                        resp = send_via_socket(ask_data, socket_path) or send_via_http(ask_data, port=int(os.environ.get('SENTINEL_PORT', 9191)))
+                        resp = send_via_socket(ask_data, socket_path) or send_via_http(ask_data)
                         break
             except Exception:
                 pass

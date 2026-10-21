@@ -417,14 +417,25 @@ final class RulesEngine {
         encoder.outputFormatting = .prettyPrinted
         encoder.dateEncodingStrategy = .iso8601
 
-        if let data = try? encoder.encode(storedRules) {
-            try? data.write(to: storageDir.appendingPathComponent("rules.json"))
+        do {
+            let data = try encoder.encode(storedRules)
+            try data.write(to: storageDir.appendingPathComponent("rules.json"), options: .atomic)
+        } catch {
+            print("[RulesEngine] Error saving rules: \(error)")
         }
-        if let data = try? encoder.encode(activeGrants) {
-            try? data.write(to: storageDir.appendingPathComponent("grants.json"))
+
+        do {
+            let data = try encoder.encode(activeGrants)
+            try data.write(to: storageDir.appendingPathComponent("grants.json"), options: .atomic)
+        } catch {
+            print("[RulesEngine] Error saving grants: \(error)")
         }
-        if let data = try? encoder.encode(auditLogs) {
-            try? data.write(to: storageDir.appendingPathComponent("audit_log.json"))
+
+        do {
+            let data = try encoder.encode(auditLogs)
+            try data.write(to: storageDir.appendingPathComponent("audit_log.json"), options: .atomic)
+        } catch {
+            print("[RulesEngine] Error saving audit log: \(error)")
         }
     }
 
@@ -433,22 +444,45 @@ final class RulesEngine {
         decoder.dateDecodingStrategy = .iso8601
 
         let rulesURL = storageDir.appendingPathComponent("rules.json")
-        if let data = try? Data(contentsOf: rulesURL),
-           let rules = try? decoder.decode([StoredRule].self, from: data) {
-            self.storedRules = rules
+        if FileManager.default.fileExists(atPath: rulesURL.path) {
+            do {
+                let data = try Data(contentsOf: rulesURL)
+                self.storedRules = try decoder.decode([StoredRule].self, from: data)
+            } catch {
+                print("[RulesEngine] Warning: Could not decode rules from \(rulesURL.path): \(error)")
+                backupCorruptFile(at: rulesURL)
+            }
         }
 
         let grantsURL = storageDir.appendingPathComponent("grants.json")
-        if let data = try? Data(contentsOf: grantsURL),
-           let grants = try? decoder.decode([ActiveGrant].self, from: data) {
-            self.activeGrants = grants.filter { !$0.isExpired }
+        if FileManager.default.fileExists(atPath: grantsURL.path) {
+            do {
+                let data = try Data(contentsOf: grantsURL)
+                let grants = try decoder.decode([ActiveGrant].self, from: data)
+                self.activeGrants = grants.filter { !$0.isExpired }
+            } catch {
+                print("[RulesEngine] Warning: Could not decode grants from \(grantsURL.path): \(error)")
+                backupCorruptFile(at: grantsURL)
+            }
         }
 
         let auditURL = storageDir.appendingPathComponent("audit_log.json")
-        if let data = try? Data(contentsOf: auditURL),
-           let logs = try? decoder.decode([AuditLogEntry].self, from: data) {
-            self.auditLogs = logs
-            self.backfillHashesIfNeeded()
+        if FileManager.default.fileExists(atPath: auditURL.path) {
+            do {
+                let data = try Data(contentsOf: auditURL)
+                self.auditLogs = try decoder.decode([AuditLogEntry].self, from: data)
+                self.backfillHashesIfNeeded()
+            } catch {
+                print("[RulesEngine] Warning: Could not decode audit log from \(auditURL.path): \(error)")
+                backupCorruptFile(at: auditURL)
+            }
         }
+    }
+
+    private func backupCorruptFile(at url: URL) {
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let backupURL = url.deletingPathExtension().appendingPathExtension("corrupt.\(timestamp).json")
+        try? FileManager.default.copyItem(at: url, to: backupURL)
+        print("[RulesEngine] Preserved corrupt configuration copy at \(backupURL.path)")
     }
 }

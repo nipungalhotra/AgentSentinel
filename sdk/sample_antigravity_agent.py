@@ -39,7 +39,7 @@ async def run_antigravity_agent():
         name="run_command",
         args={
             "CommandLine": "docker compose down -v && docker compose up -d",
-            "cwd": "/Users/nipun"
+            "cwd": os.path.expanduser("~")
         }
     )
 

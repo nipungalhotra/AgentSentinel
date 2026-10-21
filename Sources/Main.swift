@@ -51,16 +51,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleCustomURL(_ url: URL) {
         guard url.scheme?.lowercased() == "loggdin" else { return }
-        let action = url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let rawAction = url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let action = rawAction.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let queryItems = components?.queryItems ?? []
-        let scopeParam = queryItems.first(where: { $0.name == "scope" })?.value?.lowercased() ?? "once"
-        let reqId = queryItems.first(where: { $0.name == "id" })?.value
+        let rawScope = queryItems.first(where: { $0.name == "scope" })?.value?.lowercased() ?? "once"
+        let reqId = queryItems.first(where: { $0.name == "id" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        switch action.lowercased() {
+        switch action {
         case "allow":
             let scope: AllowScope
-            switch scopeParam {
+            switch rawScope {
             case "10m", "tenminutes", "10_minutes":
                 scope = .tenMinutes
             case "always":
@@ -81,12 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case "sound":
             if let name = queryItems.first(where: { $0.name == "name" })?.value {
-                Task { @MainActor in
-                    SoundEngine.shared.popupSoundName = name
-                    SoundEngine.shared.playPopup()
+                let sanitizedName = name.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+                if !sanitizedName.isEmpty {
+                    Task { @MainActor in
+                        SoundEngine.shared.popupSoundName = sanitizedName
+                        SoundEngine.shared.playPopup()
+                    }
                 }
             }
         default:
+            print("[loggdin] Received unhandled custom URL action: \(action)")
             break
         }
     }
@@ -104,17 +109,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         if lockFileDescriptor >= 0 {
             close(lockFileDescriptor)
+            lockFileDescriptor = -1
         }
     }
 
     private func acquireSingleInstanceLock() -> Bool {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("AgentSentinel", isDirectory: true)
-        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("AgentSentinel", isDirectory: true) else {
+            print("[loggdin] Warning: Could not locate Application Support directory.")
+            return true
+        }
+        do {
+            try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        } catch {
+            print("[loggdin] Warning: Could not create Application Support directory: \(error)")
+        }
         let lockPath = appSupport.appendingPathComponent("loggdin.lock").path
 
         let fd = open(lockPath, O_CREAT | O_RDWR, 0o600)
-        guard fd >= 0 else { return true }
+        guard fd >= 0 else {
+            print("[loggdin] Warning: Could not open lockfile at \(lockPath): errno \(errno)")
+            return true
+        }
 
         if flock(fd, LOCK_EX | LOCK_NB) != 0 {
             close(fd)

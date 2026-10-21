@@ -28,7 +28,7 @@ final class SentinelManager: NSObject {
             guard let self else { return .deny }
             return await self.evaluateOrAsk(req)
         }
-        ipcServer.start(port: 9191)
+        ipcServer.start()
 
         // Setup Menu Bar
         setupMenuBar()

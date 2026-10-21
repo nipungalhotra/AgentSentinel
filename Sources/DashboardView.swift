@@ -705,17 +705,21 @@ async function main() {
 main();
 """
 
-    let mcpJsonSnippet = """
+    var mcpJsonSnippet: String {
+        let scriptPath = HookInstaller.shared.mcpScriptPath
+        let portStr = String(LocalIPCServer.shared.port)
+        return """
 {
   "mcpServers": {
     "sentinel": {
       "command": "node",
-      "args": ["/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-mcp.js"],
-      "env": { "SENTINEL_PORT": "9191" }
+      "args": ["\(scriptPath)"],
+      "env": { "SENTINEL_PORT": "\(portStr)" }
     }
   }
 }
 """
+    }
 
     let zshSnippet = """
 # Agent Sentinel ZSH Shell Interceptor (in ~/.zshrc)

@@ -12,7 +12,17 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const SENTINEL_PORT = process.env.SENTINEL_PORT || 9191;
+function getSentinelPort() {
+  if (process.env.LOGGDIN_PORT) return parseInt(process.env.LOGGDIN_PORT, 10);
+  if (process.env.SENTINEL_PORT) return parseInt(process.env.SENTINEL_PORT, 10);
+  try {
+    const p1 = path.join(os.homedir(), '.loggdin', 'port');
+    if (fs.existsSync(p1)) return parseInt(fs.readFileSync(p1, 'utf8').trim(), 10);
+    const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'port');
+    if (fs.existsSync(p2)) return parseInt(fs.readFileSync(p2, 'utf8').trim(), 10);
+  } catch {}
+  return 9191;
+}
 
 function getSentinelToken() {
   try {
@@ -37,7 +47,7 @@ function requestSentinel(payload) {
     }
     const options = {
       hostname: '127.0.0.1',
-      port: SENTINEL_PORT,
+      port: getSentinelPort(),
       path: '/ask',
       method: 'POST',
       headers: headers,
@@ -61,7 +71,7 @@ function requestSentinel(payload) {
       // If Sentinel is not running, attempt to launch it
       if (err.code === 'ECONNREFUSED') {
         try {
-          execSync('open /Applications/AgentSentinel.app || open /Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app');
+          execSync('open -g -j /Applications/Loggdin.app 2>/dev/null || open -g -j /Applications/AgentSentinel.app 2>/dev/null || open /Applications/Loggdin.app 2>/dev/null || true');
           // Wait 1.5s and retry once
           setTimeout(() => {
             const retryReq = http.request(options, (res2) => {

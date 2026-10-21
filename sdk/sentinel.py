@@ -9,7 +9,25 @@ import urllib.error
 import subprocess
 import os
 
-SENTINEL_URL = os.environ.get("SENTINEL_URL", "http://127.0.0.1:9191/ask")
+def get_sentinel_url(endpoint: str = "ask") -> str:
+    if "SENTINEL_URL" in os.environ:
+        return os.environ["SENTINEL_URL"]
+    port = os.environ.get("SENTINEL_PORT") or os.environ.get("LOGGDIN_PORT")
+    if not port:
+        for p in [os.path.expanduser("~/.loggdin/port"), os.path.expanduser("~/Library/Application Support/AgentSentinel/port")]:
+            if os.path.exists(p):
+                try:
+                    with open(p) as f:
+                        val = f.read().strip()
+                        if val:
+                            port = val
+                            break
+                except Exception:
+                    pass
+    port = port or "9191"
+    return f"http://127.0.0.1:{port}/{endpoint}"
+
+SENTINEL_URL = get_sentinel_url()
 
 def ask_permission(
     command: str,
@@ -53,8 +71,9 @@ def ask_permission(
             except Exception:
                 pass
 
+        target_url = get_sentinel_url("ask")
         req = urllib.request.Request(
-            SENTINEL_URL,
+            target_url,
             data=data,
             headers=headers
         )
@@ -64,22 +83,50 @@ def ask_permission(
     except urllib.error.URLError:
         # If Sentinel is not running, try to launch the app
         try:
-            if os.path.exists("/Applications/AgentSentinel.app"):
-                subprocess.run(["open", "/Applications/AgentSentinel.app"], check=False)
-            else:
-                subprocess.run(["open", "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app"], check=False)
+            for app_candidate in ["/Applications/Loggdin.app", "/Applications/AgentSentinel.app"]:
+                if os.path.exists(app_candidate):
+                    subprocess.run(["open", "-g", "-j", app_candidate], check=False)
+                    break
         except Exception:
             pass
         return False
     except Exception:
         return False
 
-def guard(command: str, requested_by: str = "Agent", directory: str = None) -> subprocess.CompletedProcess:
+import shlex
+from typing import Union, List
+
+def guard(
+    command: Union[str, List[str]],
+    requested_by: str = "Agent",
+    directory: str = None,
+    shell: bool = None,
+    **kwargs
+) -> subprocess.CompletedProcess:
     """
     Requests permission via Liquid Glass popup and executes the command only if approved.
+    Supports either string commands or argument lists to prevent shell injection.
     Raises PermissionError if denied.
     """
-    if not ask_permission(command, requested_by=requested_by, directory=directory):
-        raise PermissionError(f"Sentinel: Permission denied by user for command '{command}'")
+    if isinstance(command, (list, tuple)):
+        cmd_str = " ".join(command)
+    else:
+        cmd_str = str(command)
 
-    return subprocess.run(command, shell=True, cwd=directory or os.getcwd(), capture_output=True, text=True)
+    if not ask_permission(cmd_str, requested_by=requested_by, directory=directory):
+        raise PermissionError(f"Sentinel: Permission denied by user for command '{cmd_str}'")
+
+    cwd = directory or os.getcwd()
+
+    if isinstance(command, (list, tuple)):
+        return subprocess.run(command, shell=False, cwd=cwd, capture_output=True, text=True, **kwargs)
+
+    if shell is None:
+        has_metachars = any(c in cmd_str for c in ["|", "&", ";", ">", "<", "`", "$"])
+        shell = has_metachars
+
+    if shell:
+        return subprocess.run(cmd_str, shell=True, cwd=cwd, capture_output=True, text=True, **kwargs)
+    else:
+        args = shlex.split(cmd_str)
+        return subprocess.run(args, shell=False, cwd=cwd, capture_output=True, text=True, **kwargs)

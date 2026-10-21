@@ -4,16 +4,53 @@
 # Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, Copilot, and ZSH Shells.
 # Modeled after Coucou (https://github.com/Louis-CFM/coucou) architecture
 
-SENTINEL_DIR="/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel"
-MCP_SERVER="$SENTINEL_DIR/bin/sentinel-mcp.js"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ $SCRIPT_PATH != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+BIN_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+SENTINEL_DIR="$(cd -P "$BIN_DIR/.." && pwd)"
+
+APP_PATH="/Applications/Loggdin.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="/Applications/AgentSentinel.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="$SENTINEL_DIR/Loggdin.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="$SENTINEL_DIR/dist/Loggdin.app"
+[ ! -d "$APP_PATH" ] && APP_PATH="$SENTINEL_DIR/AgentSentinel.app"
+
 HOOK_SCRIPT="$HOME/Library/Application Support/AgentSentinel/sentinel-hook"
-PORT=9191
+
+MCP_SERVER=""
+for p in "$BIN_DIR/sentinel-mcp.js" "$BIN_DIR/../Resources/sentinel-mcp.js" "$SENTINEL_DIR/bin/sentinel-mcp.js" "/Applications/Loggdin.app/Contents/Resources/bin/sentinel-mcp.js" "$HOME/Library/Application Support/AgentSentinel/sentinel-mcp.js"; do
+  if [ -f "$p" ]; then
+    MCP_SERVER="$p"
+    break
+  fi
+done
+
+get_port() {
+  if [ -n "${LOGGDIN_PORT:-}" ]; then
+    echo "$LOGGDIN_PORT"
+  elif [ -n "${SENTINEL_PORT:-}" ]; then
+    echo "$SENTINEL_PORT"
+  elif [ -f "$HOME/.loggdin/port" ]; then
+    cat "$HOME/.loggdin/port"
+  elif [ -f "$HOME/Library/Application Support/AgentSentinel/port" ]; then
+    cat "$HOME/Library/Application Support/AgentSentinel/port"
+  else
+    echo "9191"
+  fi
+}
+PORT=$(get_port)
 
 ensure_daemon() {
+  PORT=$(get_port)
   if ! curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
-    echo "🛡️ Starting Agent Sentinel daemon..."
-    open "$SENTINEL_DIR/AgentSentinel.app"
+    echo "🛡️ Starting Agent Sentinel / loggdin daemon..."
+    open "$APP_PATH" 2>/dev/null || open "$SENTINEL_DIR/AgentSentinel.app"
     for i in {1..12}; do
+      PORT=$(get_port)
       if curl -s --connect-timeout 1 "http://127.0.0.1:$PORT/status" > /dev/null 2>&1; then
         break
       fi
@@ -24,10 +61,15 @@ ensure_daemon() {
 
 deploy_hook_script() {
   mkdir -p "$HOME/Library/Application Support/AgentSentinel"
-  cp "$SENTINEL_DIR/bin/sentinel-hook" "$HOOK_SCRIPT"
-  chmod +x "$HOOK_SCRIPT"
+  for p in "$BIN_DIR/sentinel-hook" "$BIN_DIR/../Resources/sentinel-hook" "$SENTINEL_DIR/bin/sentinel-hook" "/Applications/Loggdin.app/Contents/Resources/bin/sentinel-hook"; do
+    if [ -f "$p" ]; then
+      cp "$p" "$HOOK_SCRIPT"
+      chmod +x "$HOOK_SCRIPT"
+      break
+    fi
+  done
   mkdir -p "$HOME/.local/bin"
-  ln -sf "$HOOK_SCRIPT" "$HOME/.local/bin/sentinel-hook"
+  [ -f "$HOOK_SCRIPT" ] && ln -sf "$HOOK_SCRIPT" "$HOME/.local/bin/sentinel-hook"
 }
 
 cmd_status() {
@@ -316,10 +358,14 @@ EOF
 
   if [ -f "$HOME/.zshrc" ]; then
     if ! grep -q "sentinel-hook.zsh" "$HOME/.zshrc"; then
-      echo "" >> "$HOME/.zshrc"
-      echo "# Agent Sentinel Terminal Gate" >> "$HOME/.zshrc"
-      echo "[ -f \"$HOOK_FILE\" ] && source \"$HOOK_FILE\"" >> "$HOME/.zshrc"
-      echo "✓ Added Sentinel hook to ~/.zshrc"
+      cp "$HOME/.zshrc" "$HOME/.zshrc.bak.$(date +%Y%m%d%H%M%S)"
+      cat << 'EOF' >> "$HOME/.zshrc"
+
+# >>> loggdin hook start >>>
+[ -f "$HOME/.local/share/sentinel/sentinel-hook.zsh" ] && source "$HOME/.local/share/sentinel/sentinel-hook.zsh"
+# <<< loggdin hook end <<<
+EOF
+      echo "✓ Added Sentinel hook to ~/.zshrc (backup saved to ~/.zshrc.bak.*)"
     else
       echo "✓ Hook already present in ~/.zshrc"
     fi

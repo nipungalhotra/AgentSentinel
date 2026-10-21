@@ -70,11 +70,36 @@ final class LocalIPCServer {
         return false
     }
 
-    func start(port: UInt16 = 9191) {
+    func savePortFile(_ port: UInt16) {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("AgentSentinel", isDirectory: true)
+        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        let portPath = appSupport.appendingPathComponent("port").path
+        try? "\(port)".write(toFile: portPath, atomically: true, encoding: .utf8)
+        chmod(portPath, 0o600)
+
+        let dotLoggdin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".loggdin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dotLoggdin, withIntermediateDirectories: true)
+        let dotPort = dotLoggdin.appendingPathComponent("port").path
+        try? "\(port)".write(toFile: dotPort, atomically: true, encoding: .utf8)
+        chmod(dotPort, 0o600)
+    }
+
+    func start(port: UInt16? = nil) {
         guard !isRunning else { return }
-        self.port = port
+        
+        var selectedPort: UInt16 = 9191
+        if let explicit = port {
+            selectedPort = explicit
+        } else if let envPortStr = ProcessInfo.processInfo.environment["LOGGDIN_PORT"] ?? ProcessInfo.processInfo.environment["SENTINEL_PORT"],
+                  let envPort = UInt16(envPortStr), envPort > 0 {
+            selectedPort = envPort
+        }
+
+        self.port = selectedPort
         initializeAuthToken()
-        startHTTPServer(port: port)
+        savePortFile(selectedPort)
+        startHTTPServer(port: selectedPort)
         startUnixSocketServer()
         isRunning = true
     }

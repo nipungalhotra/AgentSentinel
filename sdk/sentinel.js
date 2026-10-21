@@ -6,7 +6,21 @@
 const http = require('http');
 const { exec } = require('child_process');
 
-const SENTINEL_PORT = process.env.SENTINEL_PORT || 9191;
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function getSentinelPort() {
+  if (process.env.LOGGDIN_PORT) return parseInt(process.env.LOGGDIN_PORT, 10);
+  if (process.env.SENTINEL_PORT) return parseInt(process.env.SENTINEL_PORT, 10);
+  try {
+    const p1 = path.join(os.homedir(), '.loggdin', 'port');
+    if (fs.existsSync(p1)) return parseInt(fs.readFileSync(p1, 'utf8').trim(), 10);
+    const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'port');
+    if (fs.existsSync(p2)) return parseInt(fs.readFileSync(p2, 'utf8').trim(), 10);
+  } catch {}
+  return 9191;
+}
 
 function askPermission({
   command,
@@ -53,7 +67,7 @@ function askPermission({
 
     const req = http.request({
       hostname: '127.0.0.1',
-      port: SENTINEL_PORT,
+      port: getSentinelPort(),
       path: '/ask',
       method: 'POST',
       headers: headers,
@@ -77,4 +91,46 @@ function askPermission({
   });
 }
 
-module.exports = { askPermission };
+function guard(command, options = {}) {
+  const {
+    requestedBy = 'Agent',
+    directory = process.cwd(),
+    ...rest
+  } = options;
+
+  const cmdStr = Array.isArray(command) ? command.join(' ') : command;
+
+  return askPermission({
+    command: cmdStr,
+    requestedBy,
+    directory,
+    ...rest
+  }).then((allowed) => {
+    if (!allowed) {
+      throw new Error(`Sentinel: Permission denied by user for command '${cmdStr}'`);
+    }
+    return new Promise((resolve, reject) => {
+      const { execFile } = require('child_process');
+      if (Array.isArray(command)) {
+        const [file, ...args] = command;
+        execFile(file, args, { cwd: directory }, (error, stdout, stderr) => {
+          if (error) {
+            reject(Object.assign(error, { stdout, stderr }));
+          } else {
+            resolve({ stdout, stderr });
+          }
+        });
+      } else {
+        exec(command, { cwd: directory }, (error, stdout, stderr) => {
+          if (error) {
+            reject(Object.assign(error, { stdout, stderr }));
+          } else {
+            resolve({ stdout, stderr });
+          }
+        });
+      }
+    });
+  });
+}
+
+module.exports = { askPermission, guard, getSentinelPort };

@@ -11,18 +11,46 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sentinel import ask_permission, guard
 
+def get_daemon_port():
+    env_port = os.environ.get("LOGGDIN_PORT") or os.environ.get("SENTINEL_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            pass
+    for p in [os.path.expanduser("~/.loggdin/port"), os.path.expanduser("~/Library/Application Support/AgentSentinel/port")]:
+        if os.path.exists(p):
+            try:
+                with open(p) as f:
+                    return int(f.read().strip())
+            except Exception:
+                pass
+    return 9191
+
 def check_daemon():
     print("1️⃣ Checking Sentinel Daemon Status...")
+    port = get_daemon_port()
     try:
-        with urllib.request.urlopen("http://127.0.0.1:9191/status", timeout=2) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=2) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             print(f"   ✓ Daemon is ACTIVE on port {data.get('port')} (socket: {data.get('socket')})")
             return True
     except Exception as e:
         print(f"   ✗ Daemon offline: {e}")
         print("   -> Starting Agent Sentinel...")
-        app_path = "/Applications/AgentSentinel.app" if os.path.exists("/Applications/AgentSentinel.app") else "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/AgentSentinel.app"
-        os.system(f"open '{app_path}'")
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        candidates = [
+            "/Applications/Loggdin.app",
+            "/Applications/AgentSentinel.app",
+            os.path.join(repo_root, "dist/Loggdin.app"),
+            os.path.join(repo_root, "Loggdin.app"),
+            os.path.join(repo_root, "AgentSentinel.app")
+        ]
+        app_path = next((p for p in candidates if os.path.exists(p)), None)
+        if app_path:
+            os.system(f"open '{app_path}'")
+        else:
+            print("   -> No application bundle found. Run: ./packaging/create_dmg.sh")
         return False
 
 def check_ide_hooks():

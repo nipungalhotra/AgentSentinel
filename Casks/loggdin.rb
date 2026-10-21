@@ -1,6 +1,6 @@
 cask "loggdin" do
   version "1.2.0"
-  sha256 "79f9745e181836b6fa611d1181b02cbcd663a1613ce24982b46b7e3a24a9e5db"
+  sha256 "bf5a2227fb44a3f4328be591c93d5cbdd8eecd3d252cf1b05e2f76e125333632"
 
   url "https://github.com/nipungalhotra/AgentSentinel/releases/download/v#{version}/loggdin-v#{version}.dmg"
   name "loggdin"
@@ -11,19 +11,16 @@ cask "loggdin" do
   depends_on macos: ">= :sonoma"
 
   app "Loggdin.app"
-  binary "#{appdir}/Loggdin.app/Contents/MacOS/loggdin", target: "loggdin"
+  binary "#{appdir}/Loggdin.app/Contents/Resources/bin/loggdin", target: "loggdin"
+  binary "#{appdir}/Loggdin.app/Contents/Resources/bin/sentinel", target: "sentinel"
 
-  postflight do
-    # Deploy CLI to ~/.local/bin and configure universal hooks
-    system_command "/bin/sh",
-                   args: ["-c", "mkdir -p #{ENV["HOME"]}/.local/bin && curl -fsSL https://raw.githubusercontent.com/nipungalhotra/AgentSentinel/main/bin/loggdin -o #{ENV["HOME"]}/.local/bin/loggdin && chmod +x #{ENV["HOME"]}/.local/bin/loggdin && ln -sf #{ENV["HOME"]}/.local/bin/loggdin #{ENV["HOME"]}/.local/bin/sentinel"]
-  end
-
-  uninstall quit: "com.antigravity.loggdin"
+  uninstall quit:      "com.antigravity.loggdin",
+            launchctl: "com.antigravity.loggdin"
 
   zap trash: [
     "~/Library/Application Support/AgentSentinel",
     "~/Library/Application Support/Loggdin",
-    "~/Library/Preferences/com.antigravity.loggdin.plist"
+    "~/Library/Preferences/com.antigravity.loggdin.plist",
+    "~/.loggdin"
   ]
 end

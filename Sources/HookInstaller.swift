@@ -21,32 +21,115 @@ final class HookInstaller {
         deployHookScript()
     }
 
-    // MARK: - Deploy Hook Script
+    // MARK: - Helper Script Discovery & Deployment
+
+    private func locateHelperScript(named name: String) -> String? {
+        if let resURL = Bundle.main.resourceURL {
+            let inBundleBin = resURL.appendingPathComponent("bin").appendingPathComponent(name).path
+            if fileManager.fileExists(atPath: inBundleBin) { return inBundleBin }
+            let inBundleRoot = resURL.appendingPathComponent(name).path
+            if fileManager.fileExists(atPath: inBundleRoot) { return inBundleRoot }
+        }
+
+        if let execPath = ProcessInfo.processInfo.arguments.first {
+            let execURL = URL(fileURLWithPath: execPath).resolvingSymlinksInPath()
+            let execDir = execURL.deletingLastPathComponent()
+
+            let adjacent = execDir.appendingPathComponent(name).path
+            if fileManager.fileExists(atPath: adjacent) { return adjacent }
+
+            let inBin = execDir.appendingPathComponent("bin").appendingPathComponent(name).path
+            if fileManager.fileExists(atPath: inBin) { return inBin }
+
+            let inResources = execDir.deletingLastPathComponent().appendingPathComponent("Resources/bin").appendingPathComponent(name).path
+            if fileManager.fileExists(atPath: inResources) { return inResources }
+        }
+
+        let cwdBin = URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent("bin").appendingPathComponent(name).path
+        if fileManager.fileExists(atPath: cwdBin) { return cwdBin }
+
+        let appDefault = "/Applications/Loggdin.app/Contents/Resources/bin/\(name)"
+        if fileManager.fileExists(atPath: appDefault) { return appDefault }
+
+        return nil
+    }
+
+    private var nodeBinaryPath: String {
+        if fileManager.fileExists(atPath: "/opt/homebrew/bin/node") {
+            return "/opt/homebrew/bin/node"
+        }
+        if fileManager.fileExists(atPath: "/usr/local/bin/node") {
+            return "/usr/local/bin/node"
+        }
+        return "node"
+    }
+
+    var mcpScriptPath: String {
+        return appSupportDir.appendingPathComponent("sentinel-mcp.js").path
+    }
 
     func deployHookScript() {
         let targetDir = appSupportDir
-        try? fileManager.createDirectory(at: targetDir, withIntermediateDirectories: true)
-
-        let targetScript = targetDir.appendingPathComponent("sentinel-hook")
-
-        // Try source repository bin/sentinel-hook or bundle resource
-        let repoScriptPath = "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-hook"
-        if fileManager.fileExists(atPath: repoScriptPath) {
-            try? fileManager.removeItem(at: targetScript)
-            try? fileManager.copyItem(atPath: repoScriptPath, toPath: targetScript.path)
-            // Make executable
-            var attrs = (try? fileManager.attributesOfItem(atPath: targetScript.path)) ?? [:]
-            attrs[.posixPermissions] = 0o755
-            try? fileManager.setAttributes(attrs, ofItemAtPath: targetScript.path)
+        do {
+            try fileManager.createDirectory(at: targetDir, withIntermediateDirectories: true)
+        } catch {
+            print("[HookInstaller] Warning: Failed to create app support directory: \(error)")
         }
 
-        // Also ensure symlink in ~/.local/bin/sentinel-hook
+        let targetScript = targetDir.appendingPathComponent("sentinel-hook")
+        let targetMcp = targetDir.appendingPathComponent("sentinel-mcp.js")
+
+        // Deploy sentinel-hook
+        if let hookSrc = locateHelperScript(named: "sentinel-hook") {
+            do {
+                if fileManager.fileExists(atPath: targetScript.path) {
+                    try fileManager.removeItem(at: targetScript)
+                }
+                try fileManager.copyItem(atPath: hookSrc, toPath: targetScript.path)
+                try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: targetScript.path)
+                print("[HookInstaller] Deployed sentinel-hook to \(targetScript.path)")
+            } catch {
+                print("[HookInstaller] Error deploying sentinel-hook: \(error)")
+            }
+        } else {
+            print("[HookInstaller] Warning: Could not locate sentinel-hook source script.")
+        }
+
+        // Deploy sentinel-mcp.js
+        if let mcpSrc = locateHelperScript(named: "sentinel-mcp.js") {
+            do {
+                if fileManager.fileExists(atPath: targetMcp.path) {
+                    try fileManager.removeItem(at: targetMcp)
+                }
+                try fileManager.copyItem(atPath: mcpSrc, toPath: targetMcp.path)
+                try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: targetMcp.path)
+                print("[HookInstaller] Deployed sentinel-mcp.js to \(targetMcp.path)")
+            } catch {
+                print("[HookInstaller] Error deploying sentinel-mcp.js: \(error)")
+            }
+        } else {
+            print("[HookInstaller] Warning: Could not locate sentinel-mcp.js source script.")
+        }
+
+        // Ensure symlinks in ~/.local/bin
         let localBin = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".local/bin", isDirectory: true)
-        try? fileManager.createDirectory(at: localBin, withIntermediateDirectories: true)
-        let localSymlink = localBin.appendingPathComponent("sentinel-hook")
-        try? fileManager.removeItem(at: localSymlink)
-        try? fileManager.createSymbolicLink(at: localSymlink, withDestinationURL: targetScript)
+        do {
+            try fileManager.createDirectory(at: localBin, withIntermediateDirectories: true)
+            let localHook = localBin.appendingPathComponent("sentinel-hook")
+            if fileManager.fileExists(atPath: localHook.path) {
+                try fileManager.removeItem(at: localHook)
+            }
+            try fileManager.createSymbolicLink(at: localHook, withDestinationURL: targetScript)
+
+            let localMcp = localBin.appendingPathComponent("sentinel-mcp.js")
+            if fileManager.fileExists(atPath: localMcp.path) {
+                try fileManager.removeItem(at: localMcp)
+            }
+            try fileManager.createSymbolicLink(at: localMcp, withDestinationURL: targetMcp)
+        } catch {
+            print("[HookInstaller] Note: Could not update ~/.local/bin symlinks: \(error)")
+        }
     }
 
     private func quotedHookCmd(agent: String, event: String? = nil, ask: Bool = false) -> String {
@@ -350,18 +433,28 @@ final class HookInstaller {
 
     @discardableResult
     func installCoworkMCP() throws -> Bool {
+        deployHookScript()
         var root = (try? readJSON(at: claudeDesktopURL)) ?? [:]
         var mcp = root["mcpServers"] as? [String: Any] ?? [:]
 
-        let mcpScript = "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-mcp.js"
+        let currentPort = String(LocalIPCServer.shared.port)
         mcp["sentinel"] = [
-            "command": "/usr/local/bin/node",
-            "args": [mcpScript],
-            "env": ["SENTINEL_PORT": "9191"]
+            "command": nodeBinaryPath,
+            "args": [mcpScriptPath],
+            "env": ["SENTINEL_PORT": currentPort, "LOGGDIN_PORT": currentPort]
         ]
         root["mcpServers"] = mcp
         try writeJSON(root, to: claudeDesktopURL)
         return true
+    }
+
+    func uninstallCoworkMCP() throws {
+        guard var root = try? readJSON(at: claudeDesktopURL),
+              var mcp = root["mcpServers"] as? [String: Any] else { return }
+        mcp.removeValue(forKey: "sentinel")
+        mcp.removeValue(forKey: "loggdin")
+        root["mcpServers"] = mcp
+        try writeJSON(root, to: claudeDesktopURL)
     }
 
     // MARK: - Cursor
@@ -379,18 +472,28 @@ final class HookInstaller {
 
     @discardableResult
     func installCursorMCP() throws -> Bool {
+        deployHookScript()
         var root = (try? readJSON(at: cursorMcpURL)) ?? [:]
         var mcp = root["mcpServers"] as? [String: Any] ?? [:]
 
-        let mcpScript = "/Users/nipun/.gemini/antigravity-ide/scratch/AgentSentinel/bin/sentinel-mcp.js"
+        let currentPort = String(LocalIPCServer.shared.port)
         mcp["sentinel"] = [
-            "command": "/usr/local/bin/node",
-            "args": [mcpScript],
-            "env": ["SENTINEL_PORT": "9191"]
+            "command": nodeBinaryPath,
+            "args": [mcpScriptPath],
+            "env": ["SENTINEL_PORT": currentPort, "LOGGDIN_PORT": currentPort]
         ]
         root["mcpServers"] = mcp
         try writeJSON(root, to: cursorMcpURL)
         return true
+    }
+
+    func uninstallCursorMCP() throws {
+        guard var root = try? readJSON(at: cursorMcpURL),
+              var mcp = root["mcpServers"] as? [String: Any] else { return }
+        mcp.removeValue(forKey: "sentinel")
+        mcp.removeValue(forKey: "loggdin")
+        root["mcpServers"] = mcp
+        try writeJSON(root, to: cursorMcpURL)
     }
 
     // MARK: - Copilot CLI
@@ -420,31 +523,131 @@ final class HookInstaller {
         return true
     }
 
+    func uninstallCopilotHooks() throws {
+        if fileManager.fileExists(atPath: copilotHooksURL.path) {
+            try? fileManager.removeItem(at: copilotHooksURL)
+        }
+    }
+
     // MARK: - Terminal / Zsh
 
     private var zshrcURL: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".zshrc")
     }
 
+    private let zshMarkerBegin = "# >>> loggdin hook start >>>"
+    private let zshMarkerEnd   = "# <<< loggdin hook end <<<"
+
     func isZshInstalled() -> Bool {
         guard let content = try? String(contentsOf: zshrcURL, encoding: .utf8) else { return false }
-        return content.contains("sentinel-hook.zsh") || content.contains("sentinel run")
+        return content.contains(zshMarkerBegin) || content.contains("# Agent Sentinel Auto-Gate Hook") || content.contains("sentinel run")
     }
 
     @discardableResult
     func installZshHook() throws -> Bool {
-        let hookContent = """
-        # Agent Sentinel Auto-Gate Hook
-        if command -v sentinel >/dev/null 2>&1; then
+        deployHookScript()
+        let hookBlock = """
+        \(zshMarkerBegin)
+        # Universal liquid glass gate for shell commands
+        if command -v loggdin >/dev/null 2>&1; then
+            alias sudo='loggdin run sudo'
+            alias rm='loggdin run rm'
+        elif command -v sentinel >/dev/null 2>&1; then
             alias sudo='sentinel run sudo'
             alias rm='sentinel run rm'
         fi
+        \(zshMarkerEnd)
         """
-        if let existing = try? String(contentsOf: zshrcURL, encoding: .utf8), !existing.contains("Agent Sentinel") {
-            let updated = existing + "\n\n" + hookContent + "\n"
-            try updated.write(to: zshrcURL, atomically: true, encoding: .utf8)
+
+        let existing = (try? String(contentsOf: zshrcURL, encoding: .utf8)) ?? ""
+
+        // Create atomic backup before modifying user configuration
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime]
+        let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let backupURL = zshrcURL.deletingLastPathComponent().appendingPathComponent(".zshrc.bak.\(timestamp)")
+        if !existing.isEmpty {
+            try? existing.write(to: backupURL, atomically: true, encoding: .utf8)
         }
+
+        var updatedContent: String
+        if existing.contains(zshMarkerBegin) && existing.contains(zshMarkerEnd) {
+            let pattern = "\(zshMarkerBegin)[\\s\\S]*?\(zshMarkerEnd)"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                let range = NSRange(location: 0, length: existing.utf16.count)
+                updatedContent = regex.stringByReplacingMatches(in: existing, options: [], range: range, withTemplate: hookBlock)
+            } else {
+                updatedContent = existing
+            }
+        } else if existing.contains("# Agent Sentinel Auto-Gate Hook") {
+            let legacyPattern = "# Agent Sentinel Auto-Gate Hook[\\s\\S]*?fi"
+            if let regex = try? NSRegularExpression(pattern: legacyPattern, options: []) {
+                let range = NSRange(location: 0, length: existing.utf16.count)
+                updatedContent = regex.stringByReplacingMatches(in: existing, options: [], range: range, withTemplate: hookBlock)
+            } else {
+                updatedContent = existing + "\n\n" + hookBlock + "\n"
+            }
+        } else {
+            updatedContent = existing
+            if !updatedContent.isEmpty && !updatedContent.hasSuffix("\n") {
+                updatedContent += "\n"
+            }
+            updatedContent += "\n" + hookBlock + "\n"
+        }
+
+        try updatedContent.write(to: zshrcURL, atomically: true, encoding: .utf8)
         return true
+    }
+
+    func uninstallZshHook() throws {
+        guard let existing = try? String(contentsOf: zshrcURL, encoding: .utf8) else { return }
+
+        // Create backup
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime]
+        let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let backupURL = zshrcURL.deletingLastPathComponent().appendingPathComponent(".zshrc.bak.\(timestamp)")
+        try? existing.write(to: backupURL, atomically: true, encoding: .utf8)
+
+        var cleaned = existing
+        if cleaned.contains(zshMarkerBegin) && cleaned.contains(zshMarkerEnd) {
+            let pattern = "\\n?\(zshMarkerBegin)[\\s\\S]*?\(zshMarkerEnd)\\n?"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                let range = NSRange(location: 0, length: cleaned.utf16.count)
+                cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "\n")
+            }
+        }
+
+        if cleaned.contains("# Agent Sentinel Auto-Gate Hook") {
+            let legacyPattern = "\\n?# Agent Sentinel Auto-Gate Hook[\\s\\S]*?fi\\n?"
+            if let regex = try? NSRegularExpression(pattern: legacyPattern, options: []) {
+                let range = NSRange(location: 0, length: cleaned.utf16.count)
+                cleaned = regex.stringByReplacingMatches(in: cleaned, options: [], range: range, withTemplate: "\n")
+            }
+        }
+
+        try cleaned.write(to: zshrcURL, atomically: true, encoding: .utf8)
+    }
+
+    func uninstall(for agentId: String) throws {
+        switch agentId {
+        case "claude-code":
+            try uninstallClaudeCodeHooks()
+        case "antigravity":
+            try uninstallAntigravityHooks()
+        case "codex", "chatgpt":
+            try uninstallCodexHooks()
+        case "cowork":
+            try uninstallCoworkMCP()
+        case "cursor":
+            try uninstallCursorMCP()
+        case "terminal":
+            try uninstallZshHook()
+        case "copilot":
+            try uninstallCopilotHooks()
+        default:
+            break
+        }
     }
 
     // MARK: - Install All
@@ -454,13 +657,31 @@ final class HookInstaller {
         var succ = 0
         var fail = 0
 
-        do { try installClaudeCodeHooks(); succ += 1 } catch { fail += 1 }
-        do { try installAntigravityHooks(); succ += 1 } catch { fail += 1 }
-        do { try installCodexHooks(); succ += 1 } catch { fail += 1 }
-        do { try installCoworkMCP(); succ += 1 } catch { fail += 1 }
-        do { try installCursorMCP(); succ += 1 } catch { fail += 1 }
-        do { try installCopilotHooks(); succ += 1 } catch { fail += 1 }
-        do { try installZshHook(); succ += 1 } catch { fail += 1 }
+        let installers: [(String, () throws -> Bool)] = [
+            ("Claude Code", { try self.installClaudeCodeHooks() }),
+            ("Antigravity", { try self.installAntigravityHooks() }),
+            ("Codex", { try self.installCodexHooks() }),
+            ("Cowork MCP", { try self.installCoworkMCP() }),
+            ("Cursor MCP", { try self.installCursorMCP() }),
+            ("Copilot CLI", { try self.installCopilotHooks() }),
+            ("Zsh Shell Hook", { try self.installZshHook() })
+        ]
+
+        for (name, installer) in installers {
+            do {
+                let ok = try installer()
+                if ok {
+                    succ += 1
+                    print("[HookInstaller] Successfully configured hooks for \(name)")
+                } else {
+                    fail += 1
+                    print("[HookInstaller] Configuration unchanged or skipped for \(name)")
+                }
+            } catch {
+                fail += 1
+                print("[HookInstaller] Error installing hooks for \(name): \(error)")
+            }
+        }
 
         return (succ, fail)
     }
@@ -469,8 +690,17 @@ final class HookInstaller {
 
     private func readJSON(at url: URL) throws -> [String: Any] {
         guard fileManager.fileExists(atPath: url.path) else { return [:] }
-        let data = try Data(contentsOf: url)
-        return (try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        do {
+            let data = try Data(contentsOf: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("[HookInstaller] Warning: JSON at \(url.path) is not an object.")
+                return [:]
+            }
+            return obj
+        } catch {
+            print("[HookInstaller] Error reading JSON from \(url.path): \(error)")
+            throw error
+        }
     }
 
     private func writeJSON(_ obj: [String: Any], to url: URL) throws {
