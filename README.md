@@ -172,6 +172,44 @@ run();
 
 ---
 
+## 🧪 Automated Testing & CI/CD
+
+loggdin includes an automated test suite across 6 test suites covering security, persistence, packaging, and protocols:
+
+```bash
+# Run all automated tests
+./tests/run_all.sh
+```
+
+| Test Suite | File | What It Validates |
+| :--- | :--- | :--- |
+| **Packaging & Portability** | `tests/test_packaging_integrity.sh` | Zero hardcoded user paths, shell & Node script syntax, Homebrew Cask supply chain |
+| **RulesEngine & Merkle Chain** | `tests/test_rules_engine_logic.py` | Pipeline command splitting (`&&`, `;`, `||`), destructive command traps, Merkle chain tampering |
+| **Component Robustness** | `tests/test_components_robustness.py` | Atomic persistence, corrupt config recovery (`.corrupt.<ts>.json`), deduplication, grant expiration, ZSH marker boundaries |
+| **Python SDK** | `tests/test_sdk_python.py` | `ask_permission()`, safe `guard()` (list arguments & `shell=False`), dynamic port discovery |
+| **Node.js SDK** | `tests/test_sdk_node.js` | `askPermission()`, `guard()` (execFile array execution), dynamic port discovery |
+| **MCP Server Protocol** | `tests/test_mcp_server.py` | JSON-RPC 2.0 handshake (`initialize`, `tools/list`, and `tools/call`) |
+
+---
+
+## 🛡️ Production Error Handling & Logging
+
+### Atomic Persistence & Crash Recovery
+- **Atomic File Writes**: Configuration files (`rules.json`, `grants.json`, `audit_log.json`) are written using `.atomic` mode to prevent corruption during unexpected shutdowns.
+- **Corrupt File Defense**: If a configuration file is corrupted, `RulesEngine` automatically preserves a timestamped copy (`rules.corrupt.<timestamp>.json`) and logs diagnostics rather than silently discarding user policies.
+- **Atomic Shell Backups**: Modifying `~/.zshrc` creates an atomic timestamped backup (`~/.zshrc.bak.<timestamp>`) and wraps injections in strict boundary markers (`# >>> loggdin hook start >>>`).
+
+### Structured Logging
+All background operations emit structured diagnostic logs with clear subsystem prefixes:
+- `[loggdin]`: Single-instance mutex, URL scheme dispatch, socket binding.
+- `[HookInstaller]`: Per-agent hook deployment, configuration parsing, symlink status.
+- `[RulesEngine]`: Rule evaluation, active grant caching, Merkle chain computation.
+
+### SDK Injection Defense
+- Both Python (`sdk/sentinel.py`) and Node.js (`sdk/sentinel.js`) SDKs support argument lists (`["git", "push"]`) to execute commands with `shell=False` or `execFile`, eliminating shell injection risks.
+
+---
+
 ## 📜 Credits & License
 
 - Built natively in Swift 6, SwiftUI, and AppKit for macOS Sequoia (14+).

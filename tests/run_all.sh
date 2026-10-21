@@ -26,13 +26,14 @@ run_test() {
 
 run_test "Packaging & Portability Integrity" bash tests/test_packaging_integrity.sh
 run_test "RulesEngine Logic & Merkle Audit" python3 tests/test_rules_engine_logic.py
+run_test "Component Robustness (Rules & Hooks)" python3 tests/test_components_robustness.py
 run_test "Python SDK (sentinel.py & loggdin.py)" python3 tests/test_sdk_python.py
 run_test "Node.js SDK (sentinel.js)" node tests/test_sdk_node.js
 run_test "MCP Server Protocol & Tools" python3 tests/test_mcp_server.py
 
 echo ""
 if [[ $FAILED_TESTS -eq 0 ]]; then
-  echo "🎉 ALL TEST SUITES PASSED CLEANLY! (5/5 suites successful)"
+  echo "🎉 ALL TEST SUITES PASSED CLEANLY! (6/6 suites successful)"
   exit 0
 else
   echo "⚠️ TEST SUITE FAILED with ${FAILED_TESTS} failures."

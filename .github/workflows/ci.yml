@@ -1,0 +1,50 @@
+name: CI & Production Verification
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    name: Build, Test & Package on macOS
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compile Release Binary
+        run: |
+          swift build -c release
+
+      - name: Run Comprehensive Test Suites
+        run: |
+          chmod +x tests/*.sh
+          ./tests/run_all.sh
+
+      - name: Build Release DMG Package
+        run: |
+          chmod +x packaging/create_dmg.sh
+          ./packaging/create_dmg.sh
+
+      - name: Verify DMG Output Artifact
+        run: |
+          ls -la dist/Loggdin.dmg
+          test -f dist/Loggdin.dmg
