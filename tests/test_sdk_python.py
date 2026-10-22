@@ -80,6 +80,15 @@ class TestPythonSDK(unittest.TestCase):
         url_loggdin = loggdin.get_loggdin_url("ask")
         self.assertEqual(url_loggdin, f"http://127.0.0.1:{self.port}/ask")
 
+    def test_daemon_status_and_health(self):
+        os.environ["LOGGDIN_PORT"] = str(self.port)
+        self.assertTrue(sentinel.is_daemon_running())
+        self.assertTrue(loggdin.is_daemon_running())
+
+        status = sentinel.get_daemon_status()
+        self.assertEqual(status.get("status"), "running")
+        self.assertEqual(status.get("port"), self.port)
+
     def test_port_discovery_from_file(self):
         port_file = os.path.join(self.temp_dir, "port")
         with open(port_file, "w") as f:

@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const { askPermission, guard, getSentinelPort } = require('../sdk/sentinel');
+const { askPermission, guard, getSentinelPort, isDaemonRunning, getDaemonStatus } = require('../sdk/sentinel');
 
 async function runTests() {
   console.log('Running Node.js SDK Tests...\n');
@@ -21,11 +21,16 @@ async function runTests() {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'running', port: testPort }));
+        return;
+      }
       if (body) {
         lastPayload = JSON.parse(body);
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ allowed: responseAllowed }));
+      res.end(JSON.stringify({ allowed: responseAllowed, grantId: 'test-grant-123' }));
     });
   });
 
@@ -90,7 +95,15 @@ async function runTests() {
     assert.ok(arrayProc.stdout.includes('node-array-exec-ok'), 'array command should execute with execFile');
     console.log('✓ test_guard_execution_array_args passed');
 
-    console.log('\nAll 6 Node.js SDK tests passed successfully!');
+    // 7. Daemon Status & Health Check
+    process.env.LOGGDIN_PORT = testPort.toString();
+    const running = await isDaemonRunning();
+    assert.strictEqual(running, true, 'isDaemonRunning should resolve to true');
+    const status = await getDaemonStatus();
+    assert.strictEqual(status.status, 'running', 'getDaemonStatus should return running status');
+    console.log('✓ test_daemon_status_and_health passed');
+
+    console.log('\nAll 7 Node.js SDK tests passed successfully!');
   } finally {
     delete process.env.SENTINEL_PORT;
     server.close();

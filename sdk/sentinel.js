@@ -133,4 +133,46 @@ function guard(command, options = {}) {
   });
 }
 
-module.exports = { askPermission, guard, getSentinelPort };
+function isDaemonRunning() {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: getSentinelPort(),
+      path: '/status',
+      method: 'GET',
+      timeout: 1500
+    }, (res) => {
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
+
+function getDaemonStatus() {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: getSentinelPort(),
+      path: '/status',
+      method: 'GET',
+      timeout: 2000
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch {
+          resolve({ status: 'offline', raw: data });
+        }
+      });
+    });
+    req.on('error', (err) => resolve({ status: 'offline', error: err.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ status: 'offline', error: 'timeout' }); });
+    req.end();
+  });
+}
+
+module.exports = { askPermission, guard, getSentinelPort, isDaemonRunning, getDaemonStatus };
