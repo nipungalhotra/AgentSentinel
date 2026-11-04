@@ -150,51 +150,6 @@ loggdin test codex
 
 ---
 
----
-
-## 🏛️ System Architecture & Workflow
-
-```mermaid
-flowchart TD
-    subgraph Agents["Autonomous AI Agents & Tools"]
-        A1["Claude Code"]
-        A2["Antigravity IDE"]
-        A3["Cursor / Windsurf"]
-        A4["Codex / ChatGPT"]
-        A5["Terminal / ZSH"]
-    end
-
-    subgraph Hooks["Relay & Interception Layer"]
-        H1["sentinel-hook (CLI & Native JSON Hooks)"]
-        H2["sentinel-mcp (Model Context Protocol Server)"]
-    end
-
-    subgraph Daemon["loggdin Core Security Daemon (Swift 6)"]
-        IPC["Local IPC Engine (Unix Socket + Loopback HTTP)"]
-        RE["RulesEngine (Deduplication, 10m Grants, Whitelists)"]
-        SAFE["Catastrophic Destructive Gate (Blocks rm -rf /, mkfs)"]
-        AUDIT["Cryptographic Audit Trail (SHA-256 Merkle Chain)"]
-    end
-
-    subgraph UI["Expressive macOS Interface"]
-        NOTCH["Liquid Glass Permission Card (Flush Camera Notch)"]
-        TOUCH["Touch ID Biometrics / Hold-to-Confirm"]
-        DASH["Interactive Management Dashboard"]
-    end
-
-    Agents -->|Tool Request / Command| Hooks
-    Hooks -->|Sub-millisecond IPC| IPC
-    IPC --> RE
-    RE -->|Evaluate Policy| SAFE
-    SAFE -->|Prompt Required| NOTCH
-    NOTCH -->|Biometric Verify| TOUCH
-    TOUCH -->|User Decision| AUDIT
-    AUDIT -->|Return Result| IPC
-    IPC -->|Allow / Deny| Agents
-```
-
----
-
 ## 💡 Real-World Use Cases
 
 ### 1. Autonomous Agent Terminal Gating (LangChain, AutoGPT & CrewAI)
@@ -345,6 +300,9 @@ All background operations emit structured diagnostic logs with clear subsystem p
 
 ## 📜 Credits & License
 
-- Built natively in Swift 6, SwiftUI, and AppKit for macOS Sequoia (14+).
-- Architecture inspired by **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**.
-- Licensed under the **MIT License**.
+**loggdin** (Agent Sentinel) is created and maintained by **Nipun Galhotra** ([@nipungalhotra](https://github.com/nipungalhotra)).
+
+- **Native macOS Daemon & UI**: Built natively in Swift 6, SwiftUI, and AppKit for macOS (14+ Sonoma & 15+ Sequoia).
+- **Cross-Platform Security Core**: Portable background daemon engineered for Linux and Windows developer environments.
+- **Agent Integrations**: Universal hooks and SDKs for Claude Code, Antigravity, Cursor, Windsurf, Codex, and custom agent runtimes.
+- **License**: Released under the **MIT License** — free and open source for developers and teams.
