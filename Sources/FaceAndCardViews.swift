@@ -144,8 +144,15 @@ struct FaceView: View {
         .shadow(color: state.color.opacity(0.4), radius: 8, y: 4)
         .animation(.spring(response: 0.35, dampingFraction: 0.7), value: state)
         .animation(.easeOut(duration: 0.12), value: look)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { zFloat = true }
+        // The "zZ" only shows when sleepy; run its repeat-forever float only then (it used to
+        // animate invisibly on every popup, costing CPU for the whole time a prompt was open).
+        .onChange(of: state == .sleepy, initial: true) { _, sleepy in
+            if sleepy {
+                withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { zFloat = true }
+            } else {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { zFloat = false }
+            }
         }
         .task {
             while !Task.isCancelled {
@@ -1232,7 +1239,11 @@ final class PermissionPopupController {
             } else {
                 SoundEngine.shared.playDeny()
             }
+            // Tear the panel down completely: a merely hidden panel keeps its SwiftUI tree (and the
+            // face's repeat-forever animations) alive, so every answered prompt used to leak CPU.
             panel.orderOut(nil)
+            panel.contentView = nil
+            panel.close()
             self?.panel = nil
             self?.activeRequest = nil
             self?.activeModel = nil

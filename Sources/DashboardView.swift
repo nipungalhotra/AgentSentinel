@@ -368,15 +368,15 @@ struct DashboardView: View {
 
 struct PulsingRadarBeacon: View {
     var isGuarding: Bool
-    @UIState private var pulse = false
 
     var body: some View {
         ZStack {
             if isGuarding {
-                Circle()
-                    .stroke(Color.green.opacity(0.6), lineWidth: 1.5)
-                    .frame(width: pulse ? 22 : 8, height: pulse ? 22 : 8)
-                    .opacity(pulse ? 0 : 0.8)
+                // The expanding ring runs as a Core Animation layer (render server), not a SwiftUI
+                // repeat-forever frame animation, which re-laid-out the dashboard every frame (~20% CPU).
+                PulseRingLayer(color: NSColor.systemGreen.withAlphaComponent(0.6))
+                    .frame(width: 24, height: 24)
+                    .allowsHitTesting(false)
 
                 Circle()
                     .fill(Color.green)
@@ -389,12 +389,43 @@ struct PulsingRadarBeacon: View {
             }
         }
         .frame(width: 24, height: 24)
-        .onAppear {
-            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) {
-                pulse = true
-            }
-        }
     }
+}
+
+/// A ring that grows from 8pt to 22pt while fading out, repeating every 1.6s, driven by Core Animation.
+struct PulseRingLayer: NSViewRepresentable {
+    var color: NSColor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        view.wantsLayer = true
+        let ring = CAShapeLayer()
+        ring.frame = CGRect(x: 1, y: 1, width: 22, height: 22)
+        ring.path = CGPath(ellipseIn: CGRect(x: 0.75, y: 0.75, width: 20.5, height: 20.5), transform: nil)
+        ring.fillColor = nil
+        ring.strokeColor = color.cgColor
+        ring.lineWidth = 1.5
+        ring.opacity = 0
+
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 8.0 / 22.0
+        scale.toValue = 1.0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.8
+        fade.toValue = 0.0
+        let group = CAAnimationGroup()
+        group.animations = [scale, fade]
+        group.duration = 1.6
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        group.repeatCount = .infinity
+        group.isRemovedOnCompletion = false
+        ring.add(group, forKey: "pulse")
+
+        view.layer?.addSublayer(ring)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 // MARK: - Overview Tab

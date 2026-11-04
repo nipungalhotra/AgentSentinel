@@ -215,14 +215,51 @@ def is_compound_shell(cmd):
     return any(op in cmd for op in ("&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "&"))
 
 
+HARMLESS_FILTERS = {"head", "tail", "grep", "wc", "cut", "tr", "jq", "nl", "column", "pwd", "echo", "true"}
+
+
+def chain_segments(cmd):
+    """Split `a && b || c ; d | e`, or None if it uses substitution, redirection or background `&`."""
+    if any(b in cmd for b in ("`", "$(", ">", "<", "\n")) or "&" in cmd.replace("&&", ""):
+        return None
+    parts = [cmd]
+    for sep in ("&&", "||", ";", "|"):
+        parts = [x for part in parts for x in part.split(sep)]
+    segments = [x.strip() for x in parts]
+    return None if any(not x for x in segments) else segments
+
+
+def is_harmless_segment(seg):
+    """`cd` into a sub-folder, or a read-only text filter."""
+    words = seg.split()
+    if not words:
+        return False
+    if words[0] == "cd":
+        if len(words) != 2:
+            return False
+        t = words[1]
+        return not t.startswith(("/", "~", "$", "-")) and ".." not in t.split("/")
+    return words[0] in HARMLESS_FILTERS
+
+
 def cmd_matches(pattern, cmd, risk="low"):
-    """Exact command always; the same command with extra plain arguments only for non-high risk."""
+    """Exact command always. Otherwise (never for high risk): the same command with extra plain
+    arguments, or a chain whose every real command is covered (cd into a sub-folder and read-only
+    filters are allowed glue; substitution and redirection never match)."""
     p, c = pattern.strip(), cmd.strip()
     if not p:
         return False
     if c == p:
         return True
-    return risk != "high" and not is_compound_shell(c) and c.startswith(p + " ")
+    if risk == "high":
+        return False
+    if is_compound_shell(c):
+        segments = chain_segments(c)
+        if not segments:
+            return False
+        real = [x for x in segments if not is_harmless_segment(x)]
+        return bool(real) and all(x == p or (x.startswith(p + " ") and not is_compound_shell(x)) for x in real)
+    return c.startswith(p + " ")
 
 
 class Store:

