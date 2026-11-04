@@ -8,6 +8,42 @@ import urllib.request
 import urllib.error
 import subprocess
 import os
+import sys
+
+
+def _state_dir():
+    """Per-OS loggdin state dir (matches bin/loggdin.py and the Mac app)."""
+    if os.environ.get("LOGGDIN_HOME"):
+        return os.environ["LOGGDIN_HOME"]
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", "AgentSentinel")
+    if os.name == "nt":
+        return os.path.join(os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming"), "Loggdin")
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"), "loggdin")
+
+
+def _state_files(name):
+    files = [] if os.environ.get("LOGGDIN_HOME") else [os.path.join(os.path.expanduser("~"), ".loggdin", name)]
+    return files + [os.path.join(_state_dir(), name)]
+
+
+def _launch_daemon():
+    """Start loggdin if it is not running (Loggdin.app on macOS, loggdin.py elsewhere)."""
+    if sys.platform == "darwin":
+        for app_candidate in ["/Applications/Loggdin.app", "/Applications/AgentSentinel.app"]:
+            if os.path.exists(app_candidate):
+                subprocess.run(["open", "-g", "-j", app_candidate], check=False)
+                return
+    script = os.path.join(_state_dir(), "loggdin.py")
+    if os.path.exists(script):
+        kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+        if os.name == "nt":
+            kw["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+        else:
+            kw["start_new_session"] = True
+        subprocess.Popen([sys.executable, script, "daemon"], **kw)
+
 
 def get_loggdin_url(endpoint: str = "ask") -> str:
     if "LOGGDIN_URL" in os.environ:
@@ -16,7 +52,7 @@ def get_loggdin_url(endpoint: str = "ask") -> str:
         return os.environ["SENTINEL_URL"]
     port = os.environ.get("LOGGDIN_PORT") or os.environ.get("SENTINEL_PORT")
     if not port:
-        for p in [os.path.expanduser("~/.loggdin/port"), os.path.expanduser("~/Library/Application Support/AgentSentinel/port")]:
+        for p in _state_files("port"):
             if os.path.exists(p):
                 try:
                     with open(p) as f:
@@ -85,9 +121,7 @@ def ask_permission(
     try:
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        token_path = os.path.expanduser("~/.loggdin/token")
-        if not os.path.exists(token_path):
-            token_path = os.path.expanduser("~/Library/Application Support/AgentSentinel/token")
+        token_path = next((t for t in _state_files("token") if os.path.exists(t)), "")
         if os.path.exists(token_path):
             try:
                 with open(token_path) as f:
@@ -107,13 +141,7 @@ def ask_permission(
     except urllib.error.URLError:
         # If loggdin is not running, try to launch the app
         try:
-            for app_candidate in [
-                "/Applications/Loggdin.app",
-                "/Applications/AgentSentinel.app"
-            ]:
-                if os.path.exists(app_candidate):
-                    subprocess.run(["open", "-g", "-j", app_candidate], check=False)
-                    break
+            _launch_daemon()
         except Exception:
             pass
         return False

@@ -69,15 +69,42 @@ open dist/Loggdin.dmg
 
 ### Option 2: Build from Source
 ```bash
-git clone https://github.com/nipun/loggdin.git
-cd loggdin
+git clone https://github.com/nipungalhotra/AgentSentinel.git
+cd AgentSentinel
 swift build -c release
 cp .build/release/loggdin /Applications/Loggdin.app/Contents/MacOS/loggdin
 ```
 
----
+### Option 3: Windows & Linux (portable daemon)
+The notch app is macOS-only. On Windows and Linux, loggdin runs as a small background
+daemon (`bin/loggdin.py`, Python 3.9+ standard library only) that serves the same local API,
+so the hooks, MCP server and SDKs work unchanged. You approve requests on a local web page,
+or from the CLI, and get a desktop notification when an agent asks.
 
-## 🚀 1-Click Setup Across All AI Agents
+Download `loggdin-portable-v<version>.zip` from the release (or run `./packaging/create_portable.sh`), unzip it, then:
+
+```bash
+./install.sh                                            # Linux
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1    # Windows
+```
+
+The installer copies loggdin into your user profile, adds a `loggdin` command, starts it at login,
+and hooks every agent it finds (Claude Code, Codex, Antigravity, Cursor, Claude Desktop, Copilot).
+Use `--no-agents` / `-NoAgents` to skip that step, and `--uninstall` / `-Uninstall` to remove it.
+
+| | macOS app | Windows / Linux daemon |
+|---|---|---|
+| Approve requests | Notch popup, Touch ID | `loggdin ui` web page, `loggdin allow` / `deny` |
+| Notifications | Built in | Windows balloon, Linux `notify-send` |
+| Start at login | Login item | Startup folder / XDG autostart |
+| State folder | `~/Library/Application Support/AgentSentinel` | `%APPDATA%\Loggdin` / `~/.config/loggdin` |
+| Rules, 10-min grants, audit chain | Yes | Yes |
+
+Set `LOGGDIN_HOME` to use a different state folder. Node.js is only needed for the MCP integration.
+
+
 
 Configure all supported AI agents in one command:
 

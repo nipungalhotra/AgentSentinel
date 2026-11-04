@@ -12,26 +12,49 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+function stateDir() {
+  // Per-OS loggdin state dir (matches bin/loggdin.py and the Mac app).
+  if (process.env.LOGGDIN_HOME) return process.env.LOGGDIN_HOME;
+  const home = os.homedir();
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'AgentSentinel');
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Loggdin');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'loggdin');
+}
+
+function readStateFile(name) {
+  const files = process.env.LOGGDIN_HOME ? [] : [path.join(os.homedir(), '.loggdin', name)];
+  files.push(path.join(stateDir(), name));
+  for (const f of files) {
+    try { if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8').trim(); } catch {}
+  }
+  return '';
+}
+
+function launchDaemon() {
+  // Start loggdin if it is not running: Loggdin.app on macOS, loggdin.py elsewhere.
+  const { spawn } = require('child_process');
+  try {
+    if (process.platform === 'darwin' && fs.existsSync('/Applications/Loggdin.app')) {
+      spawn('open', ['-g', '-j', '/Applications/Loggdin.app'], { detached: true, stdio: 'ignore' }).unref();
+      return;
+    }
+    const script = path.join(stateDir(), 'loggdin.py');
+    if (fs.existsSync(script)) {
+      const py = process.platform === 'win32' ? 'pythonw' : 'python3';
+      spawn(py, [script, 'daemon'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    }
+  } catch {}
+}
+
 function getSentinelPort() {
   if (process.env.LOGGDIN_PORT) return parseInt(process.env.LOGGDIN_PORT, 10);
   if (process.env.SENTINEL_PORT) return parseInt(process.env.SENTINEL_PORT, 10);
-  try {
-    const p1 = path.join(os.homedir(), '.loggdin', 'port');
-    if (fs.existsSync(p1)) return parseInt(fs.readFileSync(p1, 'utf8').trim(), 10);
-    const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'port');
-    if (fs.existsSync(p2)) return parseInt(fs.readFileSync(p2, 'utf8').trim(), 10);
-  } catch {}
-  return 9191;
+  const v = parseInt(readStateFile('port'), 10);
+  return Number.isFinite(v) && v > 0 ? v : 9191;
 }
 
 function getSentinelToken() {
-  try {
-    const p1 = path.join(os.homedir(), '.loggdin', 'token');
-    if (fs.existsSync(p1)) return fs.readFileSync(p1, 'utf8').trim();
-    const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'token');
-    if (fs.existsSync(p2)) return fs.readFileSync(p2, 'utf8').trim();
-  } catch {}
-  return '';
+  return readStateFile('token');
 }
 
 function requestSentinel(payload) {
@@ -71,7 +94,7 @@ function requestSentinel(payload) {
       // If Sentinel is not running, attempt to launch it
       if (err.code === 'ECONNREFUSED') {
         try {
-          execSync('open -g -j /Applications/Loggdin.app 2>/dev/null || open -g -j /Applications/AgentSentinel.app 2>/dev/null || open /Applications/Loggdin.app 2>/dev/null || true');
+          launchDaemon();
           // Wait 1.5s and retry once
           setTimeout(() => {
             const retryReq = http.request(options, (res2) => {

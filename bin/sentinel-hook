@@ -153,11 +153,32 @@ def extract_modifies_files(payload, tool_name):
 
     return 'No'
 
-STATE_DIR = os.path.expanduser('~/Library/Application Support/AgentSentinel')
+IS_WINDOWS = os.name == 'nt'
+IS_MAC = sys.platform == 'darwin'
+
+def _state_dir():
+    # Must match bin/loggdin.py state_dir() and the Mac app's Application Support folder.
+    if os.environ.get('LOGGDIN_HOME'):
+        return os.environ['LOGGDIN_HOME']
+    home = os.path.expanduser('~')
+    if IS_MAC:
+        return os.path.join(home, 'Library', 'Application Support', 'AgentSentinel')
+    if IS_WINDOWS:
+        return os.path.join(os.environ.get('APPDATA') or os.path.join(home, 'AppData', 'Roaming'), 'Loggdin')
+    return os.path.join(os.environ.get('XDG_CONFIG_HOME') or os.path.join(home, '.config'), 'loggdin')
+
+STATE_DIR = _state_dir()
+MIRROR_DIR = None if os.environ.get('LOGGDIN_HOME') else os.path.join(os.path.expanduser('~'), '.loggdin')
+SOCKET_PATH = os.path.join(STATE_DIR, 'sentinel.sock')
+
+def _state_files(name):
+    files = [os.path.join(MIRROR_DIR, name)] if MIRROR_DIR else []
+    return files + [os.path.join(STATE_DIR, name)]
 # Per-user, non-world-writable location: a shared /tmp file could be pre-seeded
 # by another local user to auto-approve commands, or be unwritable and crash the hook.
 DEDUP_CACHE_FILE = os.path.join(STATE_DIR, 'dedup.json')
-DEBUG_LOG_FILE = os.path.expanduser('~/Library/Logs/loggdin/hook.log')
+DEBUG_LOG_FILE = (os.path.expanduser('~/Library/Logs/loggdin/hook.log') if IS_MAC and not os.environ.get('LOGGDIN_HOME')
+                  else os.path.join(STATE_DIR, 'logs', 'hook.log'))
 
 def debug_log(msg):
     """Opt-in diagnostics (LOGGDIN_DEBUG=1). Private to the user; never raises."""
@@ -395,6 +416,8 @@ def load_workspace_policy(payload):
     return None
 
 def send_via_socket(payload, socket_path, timeout=118):
+    if IS_WINDOWS or not hasattr(socket, 'AF_UNIX'):
+        return None
     if not os.path.exists(socket_path):
         debug_log(f"SOCKET NOT FOUND: {socket_path}\n")
         return None
@@ -433,7 +456,7 @@ def get_sentinel_port():
             return int(os.environ['SENTINEL_PORT'])
         except Exception:
             pass
-    for p in [os.path.expanduser('~/.loggdin/port'), os.path.expanduser('~/Library/Application Support/AgentSentinel/port')]:
+    for p in _state_files('port'):
         if os.path.exists(p):
             try:
                 with open(p) as f:
@@ -444,19 +467,50 @@ def get_sentinel_port():
                 pass
     return 9191
 
-def send_via_http(payload, port=None, timeout=120):
+def launch_daemon():
+    """Start loggdin when it is not running: Loggdin.app on macOS, loggdin.py elsewhere."""
+    import subprocess, time
+    if IS_MAC and not os.environ.get('LOGGDIN_HOME'):
+        for app_candidate in ['/Applications/Loggdin.app', '/Applications/AgentSentinel.app']:
+            if os.path.exists(app_candidate):
+                subprocess.run(['open', '-g', '-j', '-a', app_candidate], check=False)
+                time.sleep(0.8)
+                return True
+    here = os.path.dirname(os.path.realpath(__file__))
+    for script in (os.path.join(STATE_DIR, 'loggdin.py'), os.path.join(here, 'loggdin.py')):
+        if os.path.exists(script):
+            py = sys.executable or ('python' if IS_WINDOWS else 'python3')
+            if IS_WINDOWS:
+                w = os.path.join(os.path.dirname(py), 'pythonw.exe')
+                py = w if os.path.exists(w) else py
+            kw = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL, 'close_fds': True}
+            if IS_WINDOWS:
+                kw['creationflags'] = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED | NEW_GROUP | NO_WINDOW
+            else:
+                kw['start_new_session'] = True
+            subprocess.Popen([py, script, 'daemon'], **kw)
+            for _ in range(15):
+                time.sleep(0.2)
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{get_sentinel_port()}/status", timeout=0.5):
+                        return True
+                except Exception:
+                    pass
+            return False
+    return False
+
+def send_via_http(payload, port=None, timeout=120, path='/ask'):
     if port is None:
         port = get_sentinel_port()
-    url = f"http://127.0.0.1:{port}/ask"
+    url = f"http://127.0.0.1:{port}{path}"
     req_body = json.dumps(payload).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
     try:
-        token_path = os.path.expanduser('~/.loggdin/token')
-        if not os.path.exists(token_path):
-            token_path = os.path.expanduser('~/Library/Application Support/AgentSentinel/token')
-        if os.path.exists(token_path):
-            with open(token_path) as f:
-                headers['X-Loggdin-Token'] = f.read().strip()
+        for token_path in _state_files('token'):
+            if os.path.exists(token_path):
+                with open(token_path) as f:
+                    headers['X-Loggdin-Token'] = f.read().strip()
+                break
     except Exception:
         pass
     req = urllib.request.Request(
@@ -532,7 +586,7 @@ def main():
         sys.stdout.flush()
         sys.exit(0)
 
-    socket_path = os.path.expanduser('~/Library/Application Support/AgentSentinel/sentinel.sock')
+    socket_path = SOCKET_PATH
 
     # If event is PermissionRequest or PreToolUse requiring gating:
     if event == 'PermissionRequest' or (agent == 'antigravity' and event == 'PreToolUse'):
@@ -642,13 +696,8 @@ def main():
         # If daemon was offline, automatically launch loggdin and retry once
         if not resp:
             try:
-                for app_candidate in ['/Applications/Loggdin.app', '/Applications/AgentSentinel.app']:
-                    if os.path.exists(app_candidate):
-                        import subprocess, time
-                        subprocess.run(['open', '-g', '-j', '-a', app_candidate], check=False)
-                        time.sleep(0.8)
-                        resp = send_via_socket(ask_data, socket_path) or send_via_http(ask_data)
-                        break
+                if launch_daemon():
+                    resp = send_via_socket(ask_data, socket_path) or send_via_http(ask_data)
             except Exception:
                 pass
 
@@ -747,7 +796,8 @@ def main():
             'tool': payload.get('tool_name', ''),
             'command': extract_command(payload)
         }
-        send_via_socket(notify_data, socket_path, timeout=1)
+        if send_via_socket(notify_data, socket_path, timeout=1) is None:
+            send_via_http(notify_data, timeout=0.5, path='/event')
     except Exception:
         pass
 

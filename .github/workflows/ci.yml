@@ -80,3 +80,82 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+
+  portable:
+    name: Portable daemon (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.13"
+    env:
+      LOGGDIN_NO_NOTIFY: "1"
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cross-platform daemon, hook & CLI
+        run: python tests/test_crossplatform_daemon.py
+
+      - name: SDK, MCP and rules tests
+        run: |
+          python tests/test_sdk_python.py
+          python tests/test_components_robustness.py
+          python tests/test_rules_engine_logic.py
+          python tests/test_mcp_server.py
+          node tests/test_sdk_node.js
+
+      - name: Installer smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sh -n packaging/install.sh
+          sh packaging/install.sh --no-agents
+          ~/.local/bin/loggdin status
+          ~/.local/bin/loggdin doctor
+          test -f ~/.config/autostart/loggdin.desktop
+          sh packaging/install.sh --uninstall
+          test ! -e ~/.local/bin/loggdin
+
+      - name: Installer smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./packaging/install.ps1 -NoAgents
+          $cli = Join-Path $env:LOCALAPPDATA 'Loggdin\bin\loggdin.cmd'
+          & $cli status
+          if ($LASTEXITCODE -ne 0) { throw 'daemon not running after install' }
+          & $cli doctor
+          $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\loggdin.cmd'
+          if (-not (Test-Path $startup)) { throw 'autostart entry missing' }
+          ./packaging/install.ps1 -Uninstall
+          if (Test-Path $cli) { throw 'CLI shim not removed' }
+
+      - name: Build portable package
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: ./packaging/create_portable.sh
+
+      - name: Upload portable package
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: loggdin-portable
+          path: dist/loggdin-portable-*.zip*
+          if-no-files-found: error

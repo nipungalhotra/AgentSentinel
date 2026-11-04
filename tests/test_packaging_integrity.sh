@@ -23,6 +23,9 @@ bash -n bin/sentinel
 bash -n bin/loggdin
 bash -n packaging/create_dmg.sh
 python3 -m py_compile bin/sentinel-hook
+python3 -m py_compile bin/loggdin.py
+sh -n packaging/install.sh
+bash -n packaging/create_portable.sh
 echo "✓ All CLI scripts passed syntax checks."
 
 echo "3. Checking Node.js MCP server syntax..."

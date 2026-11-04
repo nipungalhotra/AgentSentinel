@@ -94,19 +94,13 @@ class TestPythonSDK(unittest.TestCase):
         with open(port_file, "w") as f:
             f.write(f"{self.port}\n")
 
-        # Mock the path in os.path.expanduser
-        original_expanduser = os.path.expanduser
-        try:
-            os.path.expanduser = lambda path: port_file if "port" in path else original_expanduser(path)
-            os.environ.pop("LOGGDIN_PORT", None)
-            os.environ.pop("SENTINEL_PORT", None)
-            os.environ.pop("SENTINEL_URL", None)
-            os.environ.pop("LOGGDIN_URL", None)
+        # Port discovery reads <state dir>/port; LOGGDIN_HOME points the state dir at our temp dir.
+        os.environ["LOGGDIN_HOME"] = self.temp_dir
+        for k in ("LOGGDIN_PORT", "SENTINEL_PORT", "SENTINEL_URL", "LOGGDIN_URL"):
+            os.environ.pop(k, None)
 
-            url = sentinel.get_sentinel_url("ask")
-            self.assertEqual(url, f"http://127.0.0.1:{self.port}/ask")
-        finally:
-            os.path.expanduser = original_expanduser
+        url = sentinel.get_sentinel_url("ask")
+        self.assertEqual(url, f"http://127.0.0.1:{self.port}/ask")
 
     def test_ask_permission_approved(self):
         os.environ["SENTINEL_URL"] = f"http://127.0.0.1:{self.port}/ask"

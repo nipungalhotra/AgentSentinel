@@ -11,6 +11,15 @@ while [ -L "$SCRIPT_PATH" ]; do
   [[ $SCRIPT_PATH != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
 BIN_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+# Windows/Linux: the native app is macOS-only, so use the cross-platform daemon + CLI.
+if [ "$(uname -s)" != "Darwin" ] || [ -n "${LOGGDIN_PORTABLE:-}" ]; then
+  for py in "$BIN_DIR/loggdin.py" "${XDG_CONFIG_HOME:-$HOME/.config}/loggdin/loggdin.py"; do
+    [ -f "$py" ] && exec python3 "$py" "$@"
+  done
+  echo "loggdin: loggdin.py not found next to $BIN_DIR" >&2
+  exit 1
+fi
 ROOT_DIR="$(cd -P "$BIN_DIR/.." && pwd)"
 
 APP_PATH="/Applications/Loggdin.app"
@@ -204,7 +213,7 @@ cmd_test() {
 
 cmd_pending() {
   ensure_daemon
-  PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  PENDING=$(curl -s -H "X-Loggdin-Token: $(get_token)" "http://127.0.0.1:$PORT/pending")
   if [ "${1:-}" = "--json" ] || [ "${1:-}" = "-j" ]; then
     echo "$PENDING"
     return
@@ -227,7 +236,7 @@ except Exception as e:
 
 cmd_review() {
   ensure_daemon
-  PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  PENDING=$(curl -s -H "X-Loggdin-Token: $(get_token)" "http://127.0.0.1:$PORT/pending")
   python3 -c "
 import sys, json, os, subprocess
 
