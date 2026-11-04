@@ -7,3 +7,5 @@ xcuserdata/
 DerivedData/
 __pycache__/
 dist/
+.impeccable/review/
+.impeccable/hook.cache.json

@@ -281,6 +281,14 @@ One-time setup: add these repository secrets: `MACOS_CERTIFICATE` (base64 of you
 Per release: bump the version in `packaging/Info.plist`, `bin/loggdin.py` and the casks, push the tag,
 then copy the SHA-256 shown in the workflow summary into the casks' `sha256`.
 
+## 🌐 Website
+
+The marketing site lives in `website/`: plain HTML, CSS and JS with no build step and self-hosted fonts.
+
+- **Preview locally:** `python3 -m http.server 4173 --directory website`, then open http://localhost:4173
+- **Connect the waitlist:** sign up for a form backend that accepts a POST with an `email` field (for example Buttondown, Formspree or Tally), then set `data-endpoint="…"` on the `<form id="waitlist">` in `website/index.html`. Until then, the form politely points visitors to the GitHub repo instead of pretending to sign them up.
+- **Deploy:** in the repository's Settings → Pages, set Source to "GitHub Actions". Every push to `main` that changes `website/` then publishes the site via `.github/workflows/pages.yml`. Add a custom domain in the same screen.
+
 ## 🛡️ Production Error Handling & Logging
 
 ### Atomic Persistence & Crash Recovery

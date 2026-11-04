@@ -1,0 +1,1026 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T17:49:28+00:00",
+  "title": "Design System: loggdin",
+  "extensions": {
+    "colorMeta": {
+      "plate": {
+        "role": "neutral",
+        "displayName": "Anodised Plate",
+        "canonical": "#e8e5de",
+        "tonalRamp": [
+          "#2e2e2c",
+          "#5d5c59",
+          "#8b8985",
+          "#bab7b2",
+          "#edeae5",
+          "#f2f1ed",
+          "#f8f7f5",
+          "#fdfcfc"
+        ]
+      },
+      "plate-hi": {
+        "role": "neutral",
+        "displayName": "Raised Plate",
+        "canonical": "#f3f1ec",
+        "tonalRamp": [
+          "#31302f",
+          "#61605e",
+          "#92918e",
+          "#c2c1bd",
+          "#f5f4f0",
+          "#f8f7f5",
+          "#fbfbf9",
+          "#fefefd"
+        ]
+      },
+      "plate-lo": {
+        "role": "neutral",
+        "displayName": "Machined Recess",
+        "canonical": "#dcd8cf",
+        "tonalRamp": [
+          "#2c2b29",
+          "#585653",
+          "#84827c",
+          "#b0ada6",
+          "#e3e0d9",
+          "#eceae5",
+          "#f4f3f1",
+          "#fcfbfa"
+        ]
+      },
+      "plate-deep": {
+        "role": "neutral",
+        "displayName": "Deep Recess",
+        "canonical": "#d0cbc1",
+        "tonalRamp": [
+          "#2a2927",
+          "#53514d",
+          "#7d7a74",
+          "#a6a29a",
+          "#d9d5cd",
+          "#e5e2dd",
+          "#f1efec",
+          "#fafaf9"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Legend Charcoal",
+        "canonical": "#23221f",
+        "tonalRamp": [
+          "#070706",
+          "#0e0e0c",
+          "#151413",
+          "#1c1b19",
+          "#4f4e4c",
+          "#868584",
+          "#bdbdbc",
+          "#e9e9e9"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Secondary Legend",
+        "canonical": "#57544e",
+        "tonalRamp": [
+          "#111110",
+          "#23221f",
+          "#34322f",
+          "#46433e",
+          "#797671",
+          "#a3a19e",
+          "#cdccca",
+          "#eeeeed"
+        ]
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Tertiary Legend",
+        "canonical": "#6e6a63",
+        "tonalRamp": [
+          "#161514",
+          "#2c2a28",
+          "#42403b",
+          "#58554f",
+          "#8b8882",
+          "#afada9",
+          "#d4d2d0",
+          "#f0f0ef"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Engraving",
+        "canonical": "#c3bdb1",
+        "tonalRamp": [
+          "#272623",
+          "#4e4c47",
+          "#75716a",
+          "#9c978e",
+          "#cfcac1",
+          "#dedbd4",
+          "#edebe8",
+          "#f9f8f7"
+        ]
+      },
+      "signal": {
+        "role": "primary",
+        "displayName": "Signal Orange",
+        "canonical": "#ee6a3d",
+        "tonalRamp": [
+          "#30150c",
+          "#5f2a18",
+          "#8f4025",
+          "#be5531",
+          "#f18864",
+          "#f6ad94",
+          "#fad2c5",
+          "#fdf0ec"
+        ]
+      },
+      "signal-press": {
+        "role": "primary",
+        "displayName": "Backlit Signal",
+        "canonical": "#f4855e",
+        "tonalRamp": [
+          "#311b13",
+          "#623526",
+          "#925038",
+          "#c36a4b",
+          "#f69d7e",
+          "#f9bca6",
+          "#fcdacf",
+          "#fef3ef"
+        ]
+      },
+      "on-signal": {
+        "role": "primary",
+        "displayName": "Burnt Charcoal",
+        "canonical": "#1d1a17",
+        "tonalRamp": [
+          "#060505",
+          "#0c0a09",
+          "#11100e",
+          "#171512",
+          "#4a4845",
+          "#83817f",
+          "#bbbab9",
+          "#e8e8e8"
+        ]
+      },
+      "lamp-green": {
+        "role": "secondary",
+        "displayName": "Lamp Green",
+        "canonical": "#3f9a62",
+        "tonalRamp": [
+          "#0d1f14",
+          "#193e27",
+          "#265c3b",
+          "#327b4e",
+          "#65ae81",
+          "#95c7a9",
+          "#c5e1d0",
+          "#ecf5ef"
+        ]
+      },
+      "lamp-off": {
+        "role": "neutral",
+        "displayName": "Unlit Lamp",
+        "canonical": "#b8b2a6",
+        "tonalRamp": [
+          "#252421",
+          "#4a4742",
+          "#6e6b64",
+          "#938e85",
+          "#c6c1b8",
+          "#d8d5ce",
+          "#eae8e4",
+          "#f8f7f6"
+        ]
+      },
+      "risk-low": {
+        "role": "secondary",
+        "displayName": "Risk Green",
+        "canonical": "#3f9a62",
+        "tonalRamp": [
+          "#0d1f14",
+          "#193e27",
+          "#265c3b",
+          "#327b4e",
+          "#65ae81",
+          "#95c7a9",
+          "#c5e1d0",
+          "#ecf5ef"
+        ]
+      },
+      "risk-med": {
+        "role": "secondary",
+        "displayName": "Risk Amber",
+        "canonical": "#e08a1e",
+        "tonalRamp": [
+          "#2d1c06",
+          "#5a370c",
+          "#865312",
+          "#b36e18",
+          "#e6a14b",
+          "#eebf83",
+          "#f6dcbc",
+          "#fcf3e8"
+        ]
+      },
+      "risk-high": {
+        "role": "secondary",
+        "displayName": "Risk Red",
+        "canonical": "#d2452f",
+        "tonalRamp": [
+          "#2a0e09",
+          "#541c13",
+          "#7e291c",
+          "#a83726",
+          "#db6a59",
+          "#e6998d",
+          "#f2c7c1",
+          "#faecea"
+        ]
+      },
+      "bezel": {
+        "role": "tertiary",
+        "displayName": "Bezel Black",
+        "canonical": "#121212",
+        "tonalRamp": [
+          "#040404",
+          "#070707",
+          "#0b0b0b",
+          "#0e0e0e",
+          "#414141",
+          "#7d7d7d",
+          "#b8b8b8",
+          "#e7e7e7"
+        ]
+      },
+      "screen": {
+        "role": "tertiary",
+        "displayName": "Screen Black",
+        "canonical": "#17181b",
+        "tonalRamp": [
+          "#050505",
+          "#090a0b",
+          "#0e0e10",
+          "#121316",
+          "#454649",
+          "#7f8082",
+          "#b9babb",
+          "#e8e8e8"
+        ]
+      },
+      "card": {
+        "role": "tertiary",
+        "displayName": "Card Glass",
+        "canonical": "#26272b",
+        "tonalRamp": [
+          "#080809",
+          "#0f1011",
+          "#17171a",
+          "#1e1f22",
+          "#515255",
+          "#88888a",
+          "#bebebf",
+          "#e9e9ea"
+        ]
+      },
+      "card-ink": {
+        "role": "tertiary",
+        "displayName": "Card Ink",
+        "canonical": "#f2f2f0",
+        "tonalRamp": [
+          "#303030",
+          "#616160",
+          "#919190",
+          "#c2c2c0",
+          "#f5f5f3",
+          "#f8f8f7",
+          "#fbfbfa",
+          "#fefefe"
+        ]
+      },
+      "card-ink-2": {
+        "role": "tertiary",
+        "displayName": "Card Ink Secondary",
+        "canonical": "#b4b4b8",
+        "tonalRamp": [
+          "#242425",
+          "#48484a",
+          "#6c6c6e",
+          "#909093",
+          "#c3c3c6",
+          "#d6d6d8",
+          "#e8e8ea",
+          "#f8f8f8"
+        ]
+      },
+      "allow-blue": {
+        "role": "tertiary",
+        "displayName": "Allow Blue (macOS mirror)",
+        "canonical": "#2668c6",
+        "tonalRamp": [
+          "#081528",
+          "#0f2a4f",
+          "#173e77",
+          "#1e539e",
+          "#5186d1",
+          "#88ace0",
+          "#bed2ee",
+          "#e9f0f9"
+        ]
+      },
+      "deny-graphite": {
+        "role": "tertiary",
+        "displayName": "Deny Graphite",
+        "canonical": "#3a3b40",
+        "tonalRamp": [
+          "#0c0c0d",
+          "#17181a",
+          "#232326",
+          "#2e2f33",
+          "#616266",
+          "#939396",
+          "#c4c4c6",
+          "#ebebec"
+        ]
+      },
+      "bezel-allow-hover": {
+        "role": "tertiary",
+        "displayName": "Allow Hover (bezel)",
+        "canonical": "#215db3",
+        "tonalRamp": [
+          "#071324",
+          "#0d2548",
+          "#14386b",
+          "#1a4a8f",
+          "#4d7dc2",
+          "#85a6d5",
+          "#bccee8",
+          "#e9eff7"
+        ]
+      },
+      "bezel-deny-hover": {
+        "role": "tertiary",
+        "displayName": "Deny Hover (bezel)",
+        "canonical": "#45464c",
+        "tonalRamp": [
+          "#0e0e0f",
+          "#1c1c1e",
+          "#292a2e",
+          "#37383d",
+          "#6a6b70",
+          "#99999d",
+          "#c7c8c9",
+          "#ececed"
+        ]
+      },
+      "bezel-well": {
+        "role": "tertiary",
+        "displayName": "Card Well (bezel)",
+        "canonical": "#1b1c1f",
+        "tonalRamp": [
+          "#050606",
+          "#0b0b0c",
+          "#101113",
+          "#161619",
+          "#49494c",
+          "#828284",
+          "#bbbbbc",
+          "#e8e8e9"
+        ]
+      },
+      "bezel-ring": {
+        "role": "tertiary",
+        "displayName": "Ring Blue (bezel)",
+        "canonical": "#5aa8f0",
+        "tonalRamp": [
+          "#122230",
+          "#244360",
+          "#366590",
+          "#4886c0",
+          "#7bb9f3",
+          "#a4cff7",
+          "#cee5fa",
+          "#eef6fe"
+        ]
+      },
+      "bezel-ring-warn": {
+        "role": "tertiary",
+        "displayName": "Ring Amber, last 3s (bezel)",
+        "canonical": "#f0a35a",
+        "tonalRamp": [
+          "#302112",
+          "#604124",
+          "#906236",
+          "#c08248",
+          "#f3b57b",
+          "#f7cca4",
+          "#fae3ce",
+          "#fef6ee"
+        ]
+      },
+      "bezel-risk-med-ink": {
+        "role": "tertiary",
+        "displayName": "Amber Chip Ink (bezel)",
+        "canonical": "#1b1307",
+        "tonalRamp": [
+          "#050401",
+          "#0b0803",
+          "#100b04",
+          "#160f06",
+          "#494239",
+          "#827d77",
+          "#bbb8b5",
+          "#e8e7e6"
+        ]
+      },
+      "bezel-cmd": {
+        "role": "tertiary",
+        "displayName": "Command Blue (bezel)",
+        "canonical": "#9ccaff",
+        "tonalRamp": [
+          "#1f2833",
+          "#3e5166",
+          "#5e7999",
+          "#7da2cc",
+          "#b0d5ff",
+          "#c9e2ff",
+          "#e1efff",
+          "#f5faff"
+        ]
+      },
+      "bezel-code": {
+        "role": "tertiary",
+        "displayName": "Editor Text (bezel)",
+        "canonical": "#c9cacf",
+        "tonalRamp": [
+          "#282829",
+          "#505153",
+          "#79797c",
+          "#a1a2a6",
+          "#d4d5d9",
+          "#e1e2e5",
+          "#efeff1",
+          "#fafafa"
+        ]
+      },
+      "bezel-tree": {
+        "role": "tertiary",
+        "displayName": "File Tree (bezel)",
+        "canonical": "#9a9ba1",
+        "tonalRamp": [
+          "#1f1f20",
+          "#3e3e40",
+          "#5c5d61",
+          "#7b7c81",
+          "#aeafb4",
+          "#c7c8cb",
+          "#e1e1e3",
+          "#f5f5f6"
+        ]
+      },
+      "bezel-syntax-keyword": {
+        "role": "tertiary",
+        "displayName": "Syntax Keyword (bezel)",
+        "canonical": "#c792ea",
+        "tonalRamp": [
+          "#281d2f",
+          "#503a5e",
+          "#77588c",
+          "#9f75bb",
+          "#d2a8ee",
+          "#e0c3f3",
+          "#eedef9",
+          "#f9f4fd"
+        ]
+      },
+      "bezel-syntax-string": {
+        "role": "tertiary",
+        "displayName": "Syntax String (bezel)",
+        "canonical": "#a5d6a7",
+        "tonalRamp": [
+          "#212b21",
+          "#425643",
+          "#638064",
+          "#84ab86",
+          "#b7deb9",
+          "#cee8cf",
+          "#e4f3e5",
+          "#f6fbf6"
+        ]
+      },
+      "bezel-syntax-function": {
+        "role": "tertiary",
+        "displayName": "Syntax Function (bezel)",
+        "canonical": "#82aaff",
+        "tonalRamp": [
+          "#1a2233",
+          "#344466",
+          "#4e6699",
+          "#6888cc",
+          "#9bbbff",
+          "#bad0ff",
+          "#dae6ff",
+          "#f2f6ff"
+        ]
+      },
+      "bezel-log-ok": {
+        "role": "tertiary",
+        "displayName": "Log Allowed (bezel)",
+        "canonical": "#7fd29b",
+        "tonalRamp": [
+          "#192a1f",
+          "#33543e",
+          "#4c7e5d",
+          "#66a87c",
+          "#99dbaf",
+          "#b9e6c8",
+          "#d9f2e1",
+          "#f2faf5"
+        ]
+      },
+      "bezel-log-no": {
+        "role": "tertiary",
+        "displayName": "Log Denied (bezel)",
+        "canonical": "#f08a7a",
+        "tonalRamp": [
+          "#301c18",
+          "#603731",
+          "#905349",
+          "#c06e62",
+          "#f3a195",
+          "#f7bfb6",
+          "#fadcd7",
+          "#fef3f2"
+        ]
+      },
+      "dark-plate": {
+        "role": "neutral",
+        "displayName": "Black Anodised Plate",
+        "canonical": "#1c1c1b",
+        "tonalRamp": [
+          "#060605",
+          "#0b0b0b",
+          "#111110",
+          "#161616",
+          "#494949",
+          "#828282",
+          "#bbbbbb",
+          "#e8e8e8"
+        ]
+      },
+      "dark-plate-hi": {
+        "role": "neutral",
+        "displayName": "Black Raised Plate",
+        "canonical": "#252524",
+        "tonalRamp": [
+          "#070707",
+          "#0f0f0e",
+          "#161616",
+          "#1e1e1d",
+          "#515150",
+          "#878787",
+          "#bebebd",
+          "#e9e9e9"
+        ]
+      },
+      "dark-plate-lo": {
+        "role": "neutral",
+        "displayName": "Black Machined Recess",
+        "canonical": "#161615",
+        "tonalRamp": [
+          "#040404",
+          "#090908",
+          "#0d0d0d",
+          "#121211",
+          "#454544",
+          "#7f7f7e",
+          "#b9b9b9",
+          "#e8e8e8"
+        ]
+      },
+      "dark-plate-deep": {
+        "role": "neutral",
+        "displayName": "Black Deep Recess",
+        "canonical": "#111110",
+        "tonalRamp": [
+          "#030303",
+          "#070706",
+          "#0a0a0a",
+          "#0e0e0d",
+          "#414140",
+          "#7c7c7c",
+          "#b8b8b7",
+          "#e7e7e7"
+        ]
+      },
+      "dark-ink": {
+        "role": "neutral",
+        "displayName": "Dark Legend",
+        "canonical": "#ecebe6",
+        "tonalRamp": [
+          "#2f2f2e",
+          "#5e5e5c",
+          "#8e8d8a",
+          "#bdbcb8",
+          "#f0efeb",
+          "#f5f4f1",
+          "#f9f9f8",
+          "#fdfdfc"
+        ]
+      },
+      "dark-ink-2": {
+        "role": "neutral",
+        "displayName": "Dark Secondary Legend",
+        "canonical": "#b3b0a8",
+        "tonalRamp": [
+          "#242322",
+          "#484643",
+          "#6b6a65",
+          "#8f8d86",
+          "#c2c0b9",
+          "#d5d4cf",
+          "#e8e7e5",
+          "#f7f7f6"
+        ]
+      },
+      "dark-ink-3": {
+        "role": "neutral",
+        "displayName": "Dark Tertiary Legend",
+        "canonical": "#9c988f",
+        "tonalRamp": [
+          "#1f1e1d",
+          "#3e3d39",
+          "#5e5b56",
+          "#7d7a72",
+          "#b0ada5",
+          "#c9c6c1",
+          "#e1e0dd",
+          "#f5f5f4"
+        ]
+      },
+      "dark-rule": {
+        "role": "neutral",
+        "displayName": "Dark Engraving",
+        "canonical": "#34332f",
+        "tonalRamp": [
+          "#0a0a09",
+          "#151413",
+          "#1f1f1c",
+          "#2a2926",
+          "#5d5c59",
+          "#8f8f8d",
+          "#c2c2c1",
+          "#ebebea"
+        ]
+      },
+      "dark-lamp-off": {
+        "role": "neutral",
+        "displayName": "Dark Unlit Lamp",
+        "canonical": "#4a4843",
+        "tonalRamp": [
+          "#0f0e0d",
+          "#1e1d1b",
+          "#2c2b28",
+          "#3b3a36",
+          "#6e6d69",
+          "#9b9a98",
+          "#c9c8c7",
+          "#ededec"
+        ]
+      }
+    },
+    "scopedPalettes": {
+      "bezel": {
+        "scope": "Inside the device bezel only (depicted product screen); fixed across colour schemes.",
+        "tokens": [
+          "bezel-allow-hover",
+          "bezel-deny-hover",
+          "bezel-well",
+          "bezel-ring",
+          "bezel-ring-warn",
+          "bezel-risk-med-ink",
+          "bezel-cmd",
+          "bezel-code",
+          "bezel-tree",
+          "bezel-syntax-keyword",
+          "bezel-syntax-string",
+          "bezel-syntax-function",
+          "bezel-log-ok",
+          "bezel-log-no",
+          "bezel",
+          "screen",
+          "card",
+          "card-ink",
+          "card-ink-2",
+          "allow-blue",
+          "deny-graphite"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Hero headline only; Archivo at stretch 88%."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section titles, max 18ch, stretch 90%."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Step, tier, download titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Reading text at 420, normal width, ss01."
+      },
+      "lede": {
+        "displayName": "Lede",
+        "purpose": "Hero sub-line in secondary legend."
+      },
+      "label": {
+        "displayName": "Spec Label",
+        "purpose": "Uppercase spec-plate terms only."
+      },
+      "display-legal": {
+        "displayName": "Legal Display",
+        "purpose": "Legal page h1."
+      },
+      "title-lg": {
+        "displayName": "Large Title",
+        "purpose": "Tier titles."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "Form notes, dates, tier states (0.88-0.93rem)."
+      },
+      "legend": {
+        "displayName": "Legend",
+        "purpose": "Bezel legend and demo caption; spec/legend steps 0.78-0.86rem."
+      },
+      "card": {
+        "displayName": "Card (product mirror)",
+        "purpose": "Notch card base; em-relative steps inside. Bezel only."
+      },
+      "terminal": {
+        "displayName": "Terminal (product mirror)",
+        "purpose": "Depicted editor and terminal; aria-hidden, bezel only, never for real content."
+      },
+      "key": {
+        "displayName": "Key Legend",
+        "purpose": "Every key legend."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Code, commands, terminal and kbd only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-key",
+        "value": "0 1px 0 rgba(0,0,0,0.16), 0 4px 8px -4px rgba(0,0,0,0.35), inset 0 1px 0 var(--rule-hi)",
+        "purpose": "Raised key at rest. Dark: 0 1px 0 rgba(0,0,0,0.6), 0 4px 8px -4px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.08)."
+      },
+      {
+        "name": "shadow-key-down",
+        "value": "0 0 0 rgba(0,0,0,0.16), 0 1px 2px -1px rgba(0,0,0,0.3), inset 0 1px 2px rgba(0,0,0,0.12)",
+        "purpose": "Pressed or latching key. Dark: 0 1px 2px -1px rgba(0,0,0,0.7), inset 0 1px 2px rgba(0,0,0,0.5)."
+      },
+      {
+        "name": "recess",
+        "value": "inset 0 1px 3px rgba(0,0,0,0.13), inset 0 0 0 1px var(--rule), 0 1px 0 var(--rule-hi)",
+        "purpose": "Machined panels cut into the plate."
+      },
+      {
+        "name": "faceplate",
+        "value": "inset 0 0 0 1px var(--rule), inset 0 2px 0 var(--rule-hi), 0 1px 0 var(--rule-hi)",
+        "purpose": "Raised first-viewport plate."
+      },
+      {
+        "name": "engraved-rule",
+        "value": "inset 0 1px 0 var(--rule-hi) (with border 1px solid var(--rule))",
+        "purpose": "Every divider."
+      },
+      {
+        "name": "bezel",
+        "value": "0 30px 60px -30px rgba(0,0,0,0.55), 0 2px 0 rgba(255,255,255,0.05) inset, 0 0 0 1px rgba(0,0,0,0.4)",
+        "purpose": "Device bezel only."
+      },
+      {
+        "name": "notch-card",
+        "value": "0 24px 48px -18px rgba(0,0,0,0.75), 0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
+        "purpose": "Notch card only (product mirror)."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-mech",
+        "value": "cubic-bezier(0.3, 0, 0.1, 1)",
+        "purpose": "Key travel (90ms, 2px), scope press (1px), deny shake (360ms)."
+      },
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Card drop/retract (420ms), FAQ toggle (220ms), face swap (200ms)."
+      },
+      {
+        "name": "color-change",
+        "value": "160ms ease",
+        "purpose": "Hover colour on keys and scopes."
+      },
+      {
+        "name": "press-hold",
+        "value": "140ms",
+        "purpose": "Scripted .is-pressed hold before the action fires."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "prefers-reduced-motion: reduce",
+        "purpose": "Disables smooth scroll, all card/face/key/scope/FAQ transitions and animations, auto-cycle and the ring countdown."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet",
+        "value": "1020px",
+        "purpose": "Single minmax(0,1fr) column; key bank to 3 columns."
+      },
+      {
+        "name": "phone",
+        "value": "720px",
+        "purpose": "Stacked plates, vertical signal path, full-width waitlist key, 'Folders' short scope label."
+      }
+    ],
+    "darkScheme": {
+      "trigger": "prefers-color-scheme: dark",
+      "name": "Black anodised",
+      "overrides": {
+        "plate": "#1c1c1b",
+        "plate-hi": "#252524",
+        "plate-lo": "#161615",
+        "plate-deep": "#111110",
+        "ink": "#ecebe6",
+        "ink-2": "#b3b0a8",
+        "ink-3": "#9c988f",
+        "rule": "#34332f",
+        "rule-hi": "rgba(255,255,255,0.06)",
+        "lamp-off": "#4a4843",
+        "bezel": "#0a0a0a"
+      }
+    },
+    "browserSurfaces": {
+      "selection": "color-mix(in srgb, var(--signal) 35%, transparent) with ink text",
+      "focus": "2px solid var(--focus) outline, 3px offset, 4px radius",
+      "scrollbar": "12px; track plate-lo; thumb ink-3, 6px radius, 3px plate-lo border; scrollbar-color ink-3 plate-lo",
+      "caret": "var(--signal)",
+      "accentColor": "var(--signal)"
+    }
+  },
+  "components": [
+    {
+      "name": "Signal Key",
+      "kind": "button",
+      "refersTo": "key-signal",
+      "description": "The one orange key per view, for the primary action only.",
+      "html": "<button class=\"ds-key ds-key-signal\">Join the waitlist</button>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-key{--key-face:var(--plate-hi);display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:44px;padding:10px 18px;border:0;border-radius:var(--radius-key);background:var(--key-face);color:var(--ink);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;font-weight:600;font-size:.98rem;line-height:1.2;cursor:pointer;white-space:nowrap;box-shadow:var(--shadow-key);transition:transform 90ms var(--ease-mech),box-shadow 90ms var(--ease-mech),background-color 160ms ease}.ds-key:hover{background:color-mix(in srgb,var(--key-face) 92%,var(--ink))}.ds-key:active{transform:translateY(2px);box-shadow:var(--shadow-key-down)}.ds-key:focus-visible{outline:2px solid var(--focus);outline-offset:3px}.ds-key-signal{--key-face:var(--signal);color:var(--on-signal)}.ds-key-signal:hover{background:var(--signal-press)}"
+    },
+    {
+      "name": "Plate Key",
+      "kind": "button",
+      "refersTo": "key",
+      "description": "Secondary detented key on a raised plate face; travels 2px when pressed.",
+      "html": "<button class=\"ds-key\">Install instructions</button>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-key{--key-face:var(--plate-hi);display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:44px;padding:10px 18px;border:0;border-radius:var(--radius-key);background:var(--key-face);color:var(--ink);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;font-weight:600;font-size:.98rem;line-height:1.2;cursor:pointer;white-space:nowrap;box-shadow:var(--shadow-key);transition:transform 90ms var(--ease-mech),box-shadow 90ms var(--ease-mech),background-color 160ms ease}.ds-key:hover{background:color-mix(in srgb,var(--key-face) 92%,var(--ink))}.ds-key:active{transform:translateY(2px);box-shadow:var(--shadow-key-down)}.ds-key:focus-visible{outline:2px solid var(--focus);outline-offset:3px}"
+    },
+    {
+      "name": "Waitlist Field",
+      "kind": "input",
+      "refersTo": "field-row",
+      "description": "Recessed well holding a borderless input and the signal key.",
+      "html": "<div class=\"ds-field\"><input placeholder=\"you@example.com\" aria-label=\"Email\"><button class=\"ds-key ds-key-signal\">Join the waitlist</button></div>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-key{--key-face:var(--plate-hi);display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:44px;padding:10px 18px;border:0;border-radius:var(--radius-key);background:var(--key-face);color:var(--ink);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;font-weight:600;font-size:.98rem;line-height:1.2;cursor:pointer;white-space:nowrap;box-shadow:var(--shadow-key);transition:transform 90ms var(--ease-mech),box-shadow 90ms var(--ease-mech),background-color 160ms ease}.ds-key:hover{background:color-mix(in srgb,var(--key-face) 92%,var(--ink))}.ds-key:active{transform:translateY(2px);box-shadow:var(--shadow-key-down)}.ds-key:focus-visible{outline:2px solid var(--focus);outline-offset:3px}.ds-key-signal{--key-face:var(--signal);color:var(--on-signal)}.ds-key-signal:hover{background:var(--signal-press)}.ds-field{display:flex;gap:10px;padding:6px;max-width:520px;background:var(--plate-lo);border-radius:10px;box-shadow:inset 0 1px 3px rgba(0,0,0,.14),0 1px 0 var(--rule-hi)}.ds-field input{flex:1;min-width:0;border:0;background:transparent;color:var(--ink);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;font-size:1rem;padding:10px 12px;border-radius:6px}.ds-field input::placeholder{color:var(--ink-3)}.ds-field input:focus-visible{outline:2px solid var(--focus);outline-offset:0}"
+    },
+    {
+      "name": "Navigation Strip",
+      "kind": "nav",
+      "refersTo": "nav",
+      "description": "Engraved top strip with the wordmark and quiet links.",
+      "html": "<nav class=\"ds-bar\"><span class=\"ds-word\"><svg viewBox=\"0 0 32 32\" width=\"28\" height=\"28\" aria-hidden=\"true\"><circle cx=\"16\" cy=\"16\" r=\"15\" fill=\"none\" stroke=\"#23221f\" stroke-width=\"2\"/><circle cx=\"16\" cy=\"16\" r=\"10.5\" fill=\"#ee6a3d\"/><circle cx=\"12.6\" cy=\"14.4\" r=\"1.5\" fill=\"#2a120a\"/><circle cx=\"19.4\" cy=\"14.4\" r=\"1.5\" fill=\"#2a120a\"/><path d=\"M11.4 18.6c2.6 3 6.6 3 9.2 0\" fill=\"none\" stroke=\"#2a120a\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>loggdin</span><span class=\"ds-links\"><a href=\"#\">How it works</a><a href=\"#\">Pricing</a><a href=\"#\" class=\"ds-gh\">GitHub</a></span></nav>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-bar{display:flex;align-items:center;justify-content:space-between;min-height:64px;padding:0 24px;background:var(--plate);border-bottom:1px solid var(--rule);box-shadow:0 1px 0 var(--rule-hi);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;}.ds-word{display:inline-flex;align-items:center;gap:10px;font-weight:700;font-stretch:92%;font-size:1.3rem;letter-spacing:-.03em;color:var(--ink)}.ds-links{display:flex;gap:24px;font-size:.95rem}.ds-links a{color:var(--ink-2);text-decoration:none;padding-block:6px}.ds-links a:hover{color:var(--ink)}.ds-links a:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:4px}.ds-gh{color:var(--ink)!important;font-weight:560}"
+    },
+    {
+      "name": "Status Lamps",
+      "kind": "chip",
+      "refersTo": "lamp-on",
+      "description": "8px lamps: green when lit, grey when off. Status only.",
+      "html": "<ul class=\"ds-legend\"><li><span class=\"ds-lamp ds-on\"></span>Runs locally</li><li><span class=\"ds-lamp\"></span>Coming soon</li></ul>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-legend{list-style:none;padding:0;margin:0;display:flex;gap:8px 24px;font-size:.86rem;color:var(--ink-2);font-stretch:94%;font-family:Archivo,ui-sans-serif,system-ui,sans-serif;}.ds-legend li{display:inline-flex;align-items:center;gap:8px}.ds-lamp{width:8px;height:8px;border-radius:50%;background:var(--lamp-off);box-shadow:inset 0 1px 1px rgba(0,0,0,.3)}.ds-on{background:var(--lamp-green);box-shadow:0 0 0 2px color-mix(in srgb,var(--lamp-green) 22%,transparent),inset 0 -1px 1px rgba(0,0,0,.25)}"
+    },
+    {
+      "name": "Recessed Panel",
+      "kind": "card",
+      "refersTo": "recessed-panel",
+      "description": "Machined panel cut into the plate, columns divided by engraved rules.",
+      "html": "<div class=\"ds-panel\"><div class=\"ds-col\"><h3>Free</h3><p>Available now</p></div><div class=\"ds-col\"><h3>Pro</h3><p>Coming soon</p></div></div>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));background:var(--panel);border-radius:12px;box-shadow:var(--recess);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;color:var(--ink)}.ds-col{padding:32px;border-left:1px solid var(--rule);box-shadow:inset 1px 0 0 var(--rule-hi)}.ds-col:first-child{border-left:0;box-shadow:none}.ds-col h3{margin:0;font-size:1.6rem;font-weight:640;letter-spacing:-.02em}.ds-col p{margin:8px 0 0;color:var(--ink-2)}"
+    },
+    {
+      "name": "Faceplate",
+      "kind": "card",
+      "refersTo": "faceplate",
+      "description": "The raised first-viewport plate with an engraved boundary and bounded grille.",
+      "html": "<div class=\"ds-face\"><h1>Every agent asks first.</h1><div class=\"ds-grille\"></div></div>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-face{background:var(--plate-hi);border-radius:20px;padding:clamp(24px,4vw,56px);box-shadow:inset 0 0 0 1px var(--rule),inset 0 2px 0 var(--rule-hi),0 1px 0 var(--rule-hi);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;color:var(--ink)}.ds-face h1{margin:0;font-size:3rem;font-stretch:88%;font-weight:660;letter-spacing:-.04em;line-height:.95}.ds-grille{margin-top:40px;height:64px;width:min(100%,520px);background-image:radial-gradient(circle at 4px 4px,var(--plate-deep) 0 1.9px,transparent 2.3px);background-size:8px 8px}"
+    },
+    {
+      "name": "Notch Card Scope and Actions",
+      "kind": "custom",
+      "refersTo": "notch-card",
+      "description": "Product mirror: dark-glass card with the latched scope radiogroup and system-blue Allow key. Lives only inside the bezel.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-scopes\" role=\"radiogroup\" aria-label=\"Scope\"><button class=\"ds-scope\" role=\"radio\" aria-checked=\"true\">Once</button><button class=\"ds-scope\" role=\"radio\" aria-checked=\"false\">10 min</button><button class=\"ds-scope\" role=\"radio\" aria-checked=\"false\">All folders</button><button class=\"ds-scope\" role=\"radio\" aria-checked=\"false\">Always</button></div><div class=\"ds-actions\"><button class=\"ds-ck ds-deny\">Deny <kbd>esc</kbd></button><button class=\"ds-ck ds-allow\">Allow once <kbd>return</kbd></button></div></div>",
+      "css": ":host{--plate:#e8e5de;--plate-hi:#f3f1ec;--plate-lo:#dcd8cf;--plate-deep:#d0cbc1;--ink:#23221f;--ink-2:#57544e;--ink-3:#6e6a63;--rule:#c3bdb1;--rule-hi:rgba(255,255,255,.7);--signal:#ee6a3d;--signal-press:#f4855e;--on-signal:#1d1a17;--lamp-green:#3f9a62;--lamp-off:#b8b2a6;--focus:#ee6a3d;--card:#26272b;--card-ink:#f2f2f0;--card-ink-2:#b4b4b8;--panel:var(--plate-lo);--recess:inset 0 1px 3px rgba(0,0,0,.13),inset 0 0 0 1px var(--rule),0 1px 0 var(--rule-hi);--shadow-key:0 1px 0 rgba(0,0,0,.16),0 4px 8px -4px rgba(0,0,0,.35),inset 0 1px 0 var(--rule-hi);--shadow-key-down:0 0 0 rgba(0,0,0,.16),0 1px 2px -1px rgba(0,0,0,.3),inset 0 1px 2px rgba(0,0,0,.12);--ease-mech:cubic-bezier(.3,0,.1,1);--ease-out:cubic-bezier(.16,1,.3,1);--radius-key:6px;--u:8px}.ds-card{width:min(400px,100%);background:color-mix(in srgb,var(--card) 94%,transparent);color:var(--card-ink);border-radius:20px;padding:18px 18px 12px;border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 48px -18px rgba(0,0,0,.75),0 2px 8px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.06);font-family:Archivo,ui-sans-serif,system-ui,sans-serif;font-size:14px}.ds-scopes{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px;background:#1b1c1f;border-radius:12px;border:1px solid rgba(255,255,255,.06)}.ds-scope{border:0;background:transparent;color:var(--card-ink-2);font:inherit;font-size:.95em;font-weight:560;padding:8px 4px;border-radius:9px;cursor:pointer;transition:background-color 160ms ease,color 160ms ease,transform 90ms var(--ease-mech)}.ds-scope:hover{color:var(--card-ink)}.ds-scope[aria-checked=true]{background:#f2f2f0;color:#17181b;box-shadow:0 1px 2px rgba(0,0,0,.4)}.ds-scope:active{transform:translateY(1px)}.ds-scope:focus-visible,.ds-ck:focus-visible{outline:2px solid var(--focus);outline-offset:1px}.ds-actions{margin-top:14px;display:grid;grid-template-columns:1fr 1.3fr;gap:10px}.ds-ck{--key-face:#3a3b40;display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:40px;padding:8px 12px;border:0;border-radius:12px;background:var(--key-face);font:inherit;font-weight:600;cursor:pointer;transition:transform 90ms var(--ease-mech)}.ds-ck:active{transform:translateY(2px)}.ds-deny{color:var(--card-ink);box-shadow:0 1px 0 rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.08)}.ds-deny:hover{background:#45464c}.ds-allow{--key-face:#2668c6;color:#fff;box-shadow:0 1px 0 rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.2)}.ds-allow:hover{background:#215db3}.ds-ck kbd{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:.78em;font-weight:500;padding:2px 6px;border-radius:5px;background:rgba(0,0,0,.28)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Braun Control Panel",
+    "overview": "The site is a single piece of anodised hardware. The ground is warm grey aluminium; content sits either on a raised faceplate or in machined recesses cut into the plate; every boundary is an engraved hairline that catches light on its lower lip. Controls are physical: detented keys that travel 2px when pressed and latch, small status lamps, a perforated speaker grille drawn from an 8px dot field. One orange key per view carries the primary action. Nothing floats, nothing glows.\n\nDensity is calm and instrument-like: generous section padding, short measured copy, and an 8px panel grid that governs every gap, inset and grille pitch. The type is one variable grotesque (Archivo) set slightly condensed and heavy for legends, like screen-printed panel lettering, with the system monospace kept for code and terminal text only. A black-anodised variant (Braun made them too) follows `prefers-color-scheme: dark` by swapping the plate and ink tokens; the geometry, signal orange and lamps are unchanged.\n\nThere is one deliberate exception to the aluminium world: the notch card. It mirrors the real macOS product's dark-glass approval card faithfully, including its system-blue Allow key, its graphite Deny key and its pill-segmented scope radiogroup, and it lives inside a black bezel with a notch slot. The card is the product shown truthfully, not a component of the panel language; its colours do not leak out onto the faceplate.",
+    "keyCharacteristics": [
+      "Warm grey anodised plate, raised faceplate, recessed machined panels.",
+      "Engraved hairline rules (dark line plus a light lower lip) as the only dividers.",
+      "8px panel grid for spacing, grille pitch and lamp size.",
+      "Detented keys with press travel and a latched state; one orange signal key per view.",
+      "Archivo variable, condensed and heavy for legends; system monospace for code only.",
+      "Mechanical motion: short travel, firm easing, no float, no glow; reduced motion removes travel.",
+      "Black-anodised dark variant by token swap only.",
+      "The notch card is a faithful mirror of the macOS product, the one dark-glass, system-blue exception."
+    ],
+    "rules": [
+      {
+        "name": "The One Orange Key Rule",
+        "body": "Signal orange fills exactly one key per view, and that key is the primary action. Secondary actions are plate-coloured keys.",
+        "section": "colors"
+      },
+      {
+        "name": "The Lamps Are Status Rule",
+        "body": "Green, amber and red appear only as lamps, risk badges and form state. They are never decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The Glass Stays In The Bezel Rule",
+        "body": "Allow blue, card glass and the dark editor palette exist only inside the device bezel. The aluminium world never borrows them.",
+        "section": "colors"
+      },
+      {
+        "name": "The Depicted Screen Rule",
+        "body": "The card and terminal sizes describe a miniature of the real product. They are valid only inside the bezel. The 10px floor applies only to decorative, aria-hidden editor text and is never a size for real content.",
+        "section": "typography"
+      },
+      {
+        "name": "The Width Axis Rule",
+        "body": "Hierarchy is carried by width and weight together: the larger the legend, the narrower and heavier it is set. Body text stays at 100% width.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono Is For Machines Rule",
+        "body": "Monospace appears only where the content is literally code, a command, a path in the editor, a terminal line or a keyboard key. Never for labels or decoration.",
+        "section": "typography"
+      },
+      {
+        "name": "The Cut Not Float Rule",
+        "body": "Panels are cut into the plate (`--recess`) or raised a millimetre from it (`--shadow-key`). Nothing on the aluminium hovers on a soft ambient shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Engraving Rule",
+        "body": "Dividers are engraved: a dark hairline with a light lip. Never a lone grey line, never a filled bar.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** put every gap, inset and texture pitch on the 8px panel grid (`--u`).",
+      "**Do** use exactly one signal-orange key per view, for the primary action, with a charcoal legend.",
+      "**Do** separate regions with engraved rules (1px rule plus a light lip) and cut panels into the plate with `--recess`.",
+      "**Do** give every key press depth: 2px travel and the key-down shadow on the mechanical curve.",
+      "**Do** mark status with lamps (8px, green on, grey off), never with coloured text alone.",
+      "**Do** set legends condensed and heavy (stretch 88-94%, weight 600-660) and reading text at 420 normal width.",
+      "**Do** use `minmax(0, 1fr)` for every collapsing grid track.",
+      "**Do** keep the dark scheme a token swap of plate and ink; geometry and signal stay put.",
+      "**Do** depict the notch card exactly as the macOS product draws it, system-blue Allow key included."
+    ],
+    "donts": [
+      "**Don't** let anything on the aluminium float or glow: no large ambient shadows, no blur halos, no hover lift. Those belong only to the bezel and card.",
+      "**Don't** use orange for secondary keys, borders or decoration beyond the focus ring, caret, selection and the mascot.",
+      "**Don't** carry Allow blue, card glass or editor syntax colours outside the device bezel.",
+      "**Don't** use monospace for labels, headings or decoration.",
+      "**Don't** add travel, drops or auto-cycling when `prefers-reduced-motion` is set.",
+      "**Don't** fill the plate with full-bleed texture; the grille is a bounded field."
+    ]
+  }
+}

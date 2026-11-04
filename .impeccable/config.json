@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "website/index.html"
+        ],
+        "createdAt": "2026-11-04T17:28:46.368Z",
+        "reason": "Claude verified false positive: computed styles in browser show .section padding 64px, .tier/.dl 32px, .keybank 16px, .specplate 8px 24px (rows 16px); detector cannot resolve clamp()/calc()/var() padding. tiers/downloads are intentionally one plate divided by rules."
+      }
+    ]
+  }
+}

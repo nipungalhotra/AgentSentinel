@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy · loggdin</title>
+  <meta name="description" content="How loggdin and this website handle your data.">
+  <link rel="icon" href="img/favicon-64.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="plate-bar">
+    <div class="wrap bar">
+      <a class="wordmark" href="index.html" aria-label="loggdin home">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" class="mark-ring"/><circle cx="16" cy="16" r="10.5" class="mark-face"/><circle cx="12.6" cy="14.4" r="1.5" class="mark-eye"/><circle cx="19.4" cy="14.4" r="1.5" class="mark-eye"/><path d="M11.4 18.6c2.6 3 6.6 3 9.2 0" class="mark-smile"/></svg>
+        <span>loggdin</span>
+      </a>
+      <nav aria-label="Site"><ul class="nav"><li><a href="index.html">Home</a></li><li><a href="https://github.com/nipungalhotra/AgentSentinel" class="nav-gh">GitHub</a></li></ul></nav>
+    </div>
+  </header>
+  <main class="section legal">
+    <div class="wrap legal-body">
+      <h1>Privacy</h1>
+      <p class="updated">Last updated: November 2026</p>
+      <h2>The app</h2>
+      <p>loggdin runs on your computer. Permission requests from your AI agents travel over 127.0.0.1 and a private Unix socket protected by a per-user token. The app has no account, sends no telemetry, and does not upload your commands, files or decisions anywhere.</p>
+      <p>Your rules, approvals and audit log are stored on your machine: in <code>~/Library/Application Support/AgentSentinel</code> on macOS, <code>%APPDATA%\Loggdin</code> on Windows and <code>~/.config/loggdin</code> on Linux. Delete that folder to erase them.</p>
+      <p>If you set up a webhook, loggdin sends the request details you configured to the address you chose. Nothing is sent unless you set one up.</p>
+      <h2>This website</h2>
+      <p>The waitlist form collects only your email address, so we can tell you when the signed Mac app is ready and about major releases. We don't sell it or share it for marketing. Every email has an unsubscribe link, and you can ask us to delete your address at any time.</p>
+      <p>The site itself uses no cookies and no analytics. It's hosted on a static web host, which may keep standard server logs such as IP addresses.</p>
+      <h2>Contact</h2>
+      <p>Questions or deletion requests: open an issue on <a href="https://github.com/nipungalhotra/AgentSentinel/issues">GitHub</a>.</p>
+    </div>
+  </main>
+  <footer class="footer"><div class="wrap footer-grid"><p class="fine">loggdin is an independent project and is not affiliated with Anthropic, OpenAI, Google, Anysphere or GitHub.</p></div></footer>
+</body>
+</html>
