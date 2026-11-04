@@ -10,7 +10,7 @@
 > **The native macOS Menu Bar security daemon & permission sentinel. Drops down an expressive Liquid Glass permission card centered directly below the MacBook camera notch, featuring Touch ID biometrics, persistent grant caching (10 min / always), and seamless keyboard focus preservation across Claude Code, Antigravity IDE, Cursor, Codex, and terminal shells.**
 
 <p align="center">
-  <a href="https://github.com/Louis-CFM/coucou"><img src="https://img.shields.io/badge/Architecture-Coucou--Parity%20Notch%20%2B%20Hooks-purple" alt="Coucou Parity" /></a>
+  <img src="https://img.shields.io/badge/Architecture-loggdin%20Liquid%20Glass%20%2B%20Hooks-purple" alt="loggdin Architecture" />
   <img src="https://img.shields.io/badge/macOS-14%2B%20%7C%20Sequoia-black?logo=apple" alt="macOS 14+" />
   <img src="https://img.shields.io/badge/Swift-6.0-orange?logo=swift" alt="Swift 6.0" />
   <img src="https://img.shields.io/badge/Biometrics-Touch%20ID%20Native-blue" alt="Touch ID Native" />
@@ -21,7 +21,7 @@
 
 ## 🌟 Universal AI Agent Compatibility
 
-Modeled after **[Louis-CFM/coucou](https://github.com/Louis-CFM/coucou)**, loggdin implements a dual-transport hook engine (sub-millisecond Unix Domain Socket + HTTP) giving every AI tool its own branded badge, theme colors, and native authorization flow:
+Engineered for high-assurance developer environments, loggdin implements a dual-transport hook engine (sub-millisecond Unix Domain Socket + HTTP) giving every AI tool its own branded badge, theme colors, and native authorization flow:
 
 | AI Assistant / Tool | Integration Channel | Config Path | What It Guards |
 | :--- | :--- | :--- | :--- |

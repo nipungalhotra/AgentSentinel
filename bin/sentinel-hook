@@ -4,7 +4,7 @@
 """
 sentinel-hook — Universal AI Agent Hook Relay for loggdin (formerly Agent Sentinel)
 Compatible with Claude Code, Cowork, Antigravity, Codex, Cursor, Gemini CLI, and Shells.
-Reference: https://github.com/Louis-CFM/coucou architecture
+Reference: loggdin architecture (https://github.com/nipungalhotra/AgentSentinel)
 """
 
 import sys

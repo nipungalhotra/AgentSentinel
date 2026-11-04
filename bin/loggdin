@@ -2,7 +2,7 @@
 
 # loggdin Universal CLI & Agent Dispatcher
 # Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, Copilot, and ZSH Shells.
-# Modeled after Coucou (https://github.com/Louis-CFM/coucou) architecture
+# loggdin architecture (https://github.com/nipungalhotra/AgentSentinel)
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
