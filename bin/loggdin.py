@@ -24,7 +24,7 @@ Usage:
     loggdin start | stop | status
     loggdin ui                     open the approval page in the browser
     loggdin pending [--json]
-    loggdin allow [once|10m|always] | loggdin deny
+    loggdin allow [once|10m|10m-all|always] | loggdin deny
     loggdin install <claude|codex|antigravity|cursor|cowork|copilot|all|detected>
     loggdin uninstall <same targets>
     loggdin autostart [on|off]
@@ -307,8 +307,10 @@ class Store:
         cmd, scope = req["command"], decision.get("scope", "once")
         with self.lock:
             self.recent[(req["directory"], cmd)] = time.time()
-            if scope == "tenMinutes":
-                self.grants.append({"pattern": cmd, "directory": req["directory"],
+            if scope in ("tenMinutes", "tenMinutesAnywhere"):
+                # "all folders" is an explicit opt-in; never for high-risk requests.
+                anywhere = scope == "tenMinutesAnywhere" and req["risk"] != "high"
+                self.grants.append({"pattern": cmd, "directory": "*" if anywhere else req["directory"],
                                     "expires": time.time() + GRANT_SECONDS})
             elif scope == "always" and not is_catastrophic(cmd):
                 if not any(r.get("pattern") == cmd and r.get("directory") == req["directory"] for r in self.rules):
@@ -452,6 +454,8 @@ def parse_decision(decision_str, scope_str):
     if (decision_str or "").lower() != "allow":
         return {"type": "deny"}
     s = (scope_str or "once").lower()
+    if s in ("10m-all", "10m_all", "tenminutesanywhere", "anywhere", "all"):
+        return {"type": "allow", "scope": "tenMinutesAnywhere"}
     if s in ("10m", "tenminutes", "10_minutes", "10min"):
         return {"type": "allow", "scope": "tenMinutes"}
     if s in ("always", "all"):
@@ -540,7 +544,10 @@ button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.d
       if(r.blastRadius)c.appendChild(el('div','meta','Blast radius: '+r.blastRadius));
       if(r.diffPreview)c.appendChild(el('pre',null,r.diffPreview));
       var b=el('div','row');
-      [['Allow once','allow','once','primary'],['Allow 10 min','allow','10m',''],['Always allow','allow','always',''],['Deny','deny','','deny']].forEach(function(a){
+      var opts=[['Allow once','allow','once','primary'],['Allow 10 min','allow','10m','']];
+      if(r.risk!=='high')opts.push(['10 min, all folders','allow','10m-all','']);
+      opts.push(['Always allow','allow','always',''],['Deny','deny','','deny']);
+      opts.forEach(function(a){
         var x=el('button',a[3],a[0]);x.onclick=function(){decide(r.id,a[1],a[2]);};b.appendChild(x);});
       c.appendChild(b);list.appendChild(c);
     });

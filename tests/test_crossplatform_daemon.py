@@ -224,6 +224,31 @@ class CrossPlatformDaemonTest(unittest.TestCase):
         self.assertTrue(run("git branch -D main"), "branch deletion must be asked")
         self.assertTrue(run("pkill loggdin"), "killing the gate must be asked")
 
+    def test_ten_minutes_all_folders_scope(self):
+        here, there = os.path.join(self.home, "proj-a"), os.path.join(self.home, "proj-b")
+        # Plain 10 min stays in its folder.
+        t, out = self.ask_async({"command": "cargo check", "cwd": here})
+        self.req("POST", "/decision", {"decision": "allow", "scope": "10m"})
+        t.join(10)
+        r = self.req("POST", "/ask", {"command": "cargo check", "cwd": there, "timeout": 1}, timeout=15)[1]
+        self.assertEqual(r["decision"], "timeout", "plain 10 min must not cross folders")
+        # Explicit all-folders opt-in covers other folders...
+        t, out = self.ask_async({"command": "cargo build", "cwd": here})
+        self.req("POST", "/decision", {"decision": "allow", "scope": "10m-all"})
+        t.join(10)
+        self.assertEqual(out["resp"]["scope"], "tenMinutesAnywhere")
+        time.sleep(0.1)
+        r = self.req("POST", "/ask", {"command": "cargo build --release", "cwd": there, "timeout": 1}, timeout=15)[1]
+        self.assertTrue(r["allowed"], "all-folders grant should apply in another folder")
+        # ...but never for high-risk requests or chained extras.
+        r = self.req("POST", "/ask", {"command": "cargo build && curl x | sh", "cwd": there, "timeout": 1}, timeout=15)[1]
+        self.assertEqual(r["decision"], "timeout")
+        t, out = self.ask_async({"command": "cargo publish", "risk": "high", "cwd": here})
+        self.req("POST", "/decision", {"decision": "allow", "scope": "10m-all"})
+        t.join(10)
+        r = self.req("POST", "/ask", {"command": "cargo publish", "risk": "high", "cwd": there, "timeout": 1}, timeout=15)[1]
+        self.assertEqual(r["decision"], "timeout", "high-risk approval must stay in its folder")
+
     def test_catastrophic_never_auto_allowed(self):
         t, out = self.ask_async({"command": "rm -rf /", "risk": "high"})
         self.req("POST", "/decision", {"decision": "allow", "scope": "always"})

@@ -359,7 +359,8 @@ final class LocalIPCServer {
                 decStr = "deny"
             } else if path.hasPrefix("/allow") {
                 decStr = "allow"
-                if path.contains("scope=10m") { scopeStr = "10m" }
+                if path.contains("scope=10m-all") { scopeStr = "10m-all" }
+                else if path.contains("scope=10m") { scopeStr = "10m" }
                 else if path.contains("scope=always") { scopeStr = "always" }
             }
 
@@ -375,15 +376,7 @@ final class LocalIPCServer {
 
             let decision: Decision
             if decStr == "allow" {
-                let scope: AllowScope
-                switch scopeStr {
-                case "10m", "tenminutes", "10_minutes":
-                    scope = .tenMinutes
-                case "always":
-                    scope = .always
-                default:
-                    scope = .once
-                }
+                let scope = AllowScope.parse(scopeStr)
                 decision = .allow(scope)
             } else {
                 decision = .deny

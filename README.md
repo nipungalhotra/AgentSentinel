@@ -45,6 +45,7 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 ### ⏱️ 2. Smart Scope Selection ("Allow once", "for 10 min", "Always allow")
 - **Allow Once (`Space` / Touch ID)**: Permits the single immediate action.
 - **Allow for 10 Min (`Tab` to toggle)**: Caches command approval for 10 minutes with auto-expiration, eliminating annoying repetitive prompts during active agent workflows.
+- **Allow 10 Min, All Folders ("10 min · all")**: An explicit opt-in for when you are working across several projects or tools at once. The approval covers every folder for 10 minutes. It is not offered for high-risk requests, and chained or unrelated commands still prompt. From the CLI: `loggdin allow 10m-all`.
 - **Always Allow**: Persists command rules to encrypted local storage (`~/.loggdin/rules.json`).
 - **Safety Boundary**: Catastrophic root commands (`rm -rf /`, `mkfs`) always require explicit verification and cannot be blindly whitelisted.
 

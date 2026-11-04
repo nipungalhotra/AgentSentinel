@@ -445,7 +445,7 @@ final class PermissionModel {
 
     func stepScope(_ delta: Int) {
         guard isAsking else { return }
-        let all = AllowScope.allCases
+        let all = AllowScope.allCases.filter { !(isHigh && $0 == .tenMinutesAnywhere) }
         guard let i = all.firstIndex(of: scope) else { return }
         let next = min(max(i + delta, 0), all.count - 1)
         withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { scope = all[next] }
@@ -954,9 +954,11 @@ struct ScopePicker: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AllowScope.allCases) { scope in
+                let disabled = locked && scope == .tenMinutesAnywhere   // never all-folders for high risk
                 Text(scope.label)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(selection == scope ? Color.primary : Color.secondary)
+                    .opacity(disabled ? 0.35 : 1)
                     .frame(maxWidth: .infinity)
                     .frame(height: 30)
                     .background {
@@ -969,8 +971,10 @@ struct ScopePicker: View {
                     }
                     .contentShape(Capsule())
                     .onTapGesture {
+                        guard !disabled else { return }
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { selection = scope }
                     }
+                    .help(disabled ? "Not available for high-risk requests" : scope.allowLabel)
             }
         }
         .padding(3)

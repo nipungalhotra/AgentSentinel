@@ -287,10 +287,12 @@ final class RulesEngine {
             let scopeFamily: String? = isFamilyScope ? effectivePrefix : nil
 
             switch decision {
-            case .allow(.tenMinutes):
+            case .allow(.tenMinutes), .allow(.tenMinutesAnywhere):
+                // "10 min · all" is an explicit opt-in to cover every folder ("*"); everything else
+                // about the grant (no high risk, exact/known-family commands, chain rules) still applies.
                 let grant = ActiveGrant(
                     commandPrefix: effectivePrefix,
-                    directory: request.directory,
+                    directory: (decision == .allow(.tenMinutesAnywhere) && request.risk != .high) ? "*" : request.directory,
                     expiresAt: Date().addingTimeInterval(600),
                     agent: request.requestedBy,
                     toolFamily: scopeFamily

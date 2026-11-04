@@ -317,6 +317,7 @@ cmd_allow() {
   ensure_daemon
   SCOPE="${1:-once}"
   case "$SCOPE" in
+    10m-all|10m_all|anywhere|all) SCOPE="10m-all" ;;
     10m|10min|10minutes) SCOPE="10m" ;;
     always|all) SCOPE="always" ;;
     *) SCOPE="once" ;;
@@ -411,7 +412,7 @@ case "$1" in
     echo "loggdin Universal CLI (Apple Shortcuts & Agent Guard)"
     echo ""
     echo "Usage:"
-    echo "  loggdin allow [once|10m|always]  Approves active permission request (ideal for Apple Shortcuts)"
+    echo "  loggdin allow [once|10m|10m-all|always]  Approves the active request (10m-all: 10 minutes in every folder)"
     echo "  loggdin deny                     Denies active permission request"
     echo "  loggdin pending                  Shows currently pending permission prompt"
     echo "  loggdin sound [Glass|Ping|Pop]   Gets or sets the notification sound"

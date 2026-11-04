@@ -61,15 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch action {
         case "allow":
-            let scope: AllowScope
-            switch rawScope {
-            case "10m", "tenminutes", "10_minutes":
-                scope = .tenMinutes
-            case "always":
-                scope = .always
-            default:
-                scope = .once
-            }
+            let scope = AllowScope.parse(rawScope)
             Task { @MainActor in
                 PermissionPopupController.shared.submitExternalDecision(.allow(scope), forRequestId: reqId)
             }
