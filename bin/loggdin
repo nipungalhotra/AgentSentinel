@@ -289,6 +289,21 @@ except Exception as e:
 " "$PENDING"
 }
 
+# Print the success message only if the daemon actually resolved a pending request.
+report_decision() {
+  local resp="$1" ok_msg="$2"
+  if [ -z "$resp" ]; then
+    echo "⚠️  No response from loggdin daemon." >&2
+    return 1
+  fi
+  if echo "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
+    echo "$ok_msg"
+  else
+    echo "ℹ️  No permission request is pending — nothing was changed."
+    return 1
+  fi
+}
+
 cmd_allow() {
   ensure_daemon
   SCOPE="${1:-once}"
@@ -301,7 +316,7 @@ cmd_allow() {
     -H "Content-Type: application/json" \
     -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"decision\":\"allow\",\"scope\":\"$SCOPE\"}")
-  echo "✓ Approved permission (Scope: $SCOPE)"
+  report_decision "$RESP" "✓ Approved permission (Scope: $SCOPE)"
 }
 
 cmd_deny() {
@@ -310,7 +325,7 @@ cmd_deny() {
     -H "Content-Type: application/json" \
     -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"decision\":\"deny\"}")
-  echo "❌ Denied permission."
+  report_decision "$RESP" "❌ Denied permission."
 }
 
 cmd_sound() {

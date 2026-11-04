@@ -46,5 +46,10 @@ jobs:
 
       - name: Verify DMG Output Artifact
         run: |
-          ls -la dist/Loggdin.dmg
+          ls -la dist/
           test -f dist/Loggdin.dmg
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/Info.plist)
+          test -f "dist/loggdin-v${VERSION}.dmg"
+          lipo -archs dist/Loggdin.app/Contents/MacOS/loggdin | grep -q x86_64
+          lipo -archs dist/Loggdin.app/Contents/MacOS/loggdin | grep -q arm64
+          codesign --verify --strict --verbose=2 dist/Loggdin.app

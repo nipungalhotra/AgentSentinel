@@ -153,7 +153,23 @@ def extract_modifies_files(payload, tool_name):
 
     return 'No'
 
-DEDUP_CACHE_FILE = '/tmp/sentinel_dedup.json'
+STATE_DIR = os.path.expanduser('~/Library/Application Support/AgentSentinel')
+# Per-user, non-world-writable location: a shared /tmp file could be pre-seeded
+# by another local user to auto-approve commands, or be unwritable and crash the hook.
+DEDUP_CACHE_FILE = os.path.join(STATE_DIR, 'dedup.json')
+DEBUG_LOG_FILE = os.path.expanduser('~/Library/Logs/loggdin/hook.log')
+
+def debug_log(msg):
+    """Opt-in diagnostics (LOGGDIN_DEBUG=1). Private to the user; never raises."""
+    if os.environ.get('LOGGDIN_DEBUG') not in ('1', 'true', 'yes'):
+        return
+    try:
+        os.makedirs(os.path.dirname(DEBUG_LOG_FILE), mode=0o700, exist_ok=True)
+        fd = os.open(DEBUG_LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, 'a') as f:
+            f.write(msg)
+    except Exception:
+        pass
 
 def check_recent_dedup(tool_name, command):
     try:
@@ -190,8 +206,12 @@ def record_recent_dedup(tool_name, command):
         entries = {k: v for k, v in entries.items() if now - v < 30.0}
         entries[f"{tool_name}:{command}"] = now
         entries[f"cmd:{command.strip().lower()}"] = now
-        with open(DEDUP_CACHE_FILE, 'w') as f:
+        os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+        tmp_path = DEDUP_CACHE_FILE + '.tmp'
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
             json.dump(entries, f)
+        os.replace(tmp_path, DEDUP_CACHE_FILE)
     except Exception:
         pass
 
@@ -376,8 +396,7 @@ def load_workspace_policy(payload):
 
 def send_via_socket(payload, socket_path, timeout=118):
     if not os.path.exists(socket_path):
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"SOCKET NOT FOUND: {socket_path}\n")
+        debug_log(f"SOCKET NOT FOUND: {socket_path}\n")
         return None
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -399,8 +418,7 @@ def send_via_socket(payload, socket_path, timeout=118):
         if response:
             return json.loads(response)
     except Exception as e:
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"SOCKET EXCEPTION: {e}\n")
+        debug_log(f"SOCKET EXCEPTION: {e}\n")
         return None
     return None
 
@@ -452,8 +470,7 @@ def send_via_http(payload, port=None, timeout=120):
             data = resp.read()
             return json.loads(data.decode('utf-8'))
     except Exception as e:
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"HTTP EXCEPTION: {e}\n")
+        debug_log(f"HTTP EXCEPTION: {e}\n")
         return None
 
 def main():
@@ -486,11 +503,9 @@ def main():
             raw = sys.stdin.buffer.read()
             if raw:
                 payload = json.loads(raw.decode('utf-8'))
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"INVOKED: args={sys.argv}, raw={raw[:200]}\n")
+        debug_log(f"INVOKED: args={sys.argv[1:]}, bytes={len(raw) if raw else 0}\n")
     except Exception as e:
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"STDIN ERROR: {e}\n")
+        debug_log(f"STDIN ERROR: {e}\n")
 
     event = event_arg or payload.get('hook_event_name') or payload.get('event') or 'PermissionRequest'
     event = normalize_event(event)
@@ -498,8 +513,7 @@ def main():
     payload['requestedBy'] = payload.get('requestedBy') or agent
     normalize_tool_fields(payload)
 
-    with open('/tmp/sentinel_hook.log', 'a') as f:
-        f.write(f"EVENT: {event}, keys={list(payload.keys())}, tool_name={payload.get('tool_name')}, toolCall={payload.get('toolCall')}\n")
+    debug_log(f"EVENT: {event}, keys={list(payload.keys())}, tool_name={payload.get('tool_name')}, toolCall={payload.get('toolCall')}\n")
 
     # Interactive question tools (AskUserQuestion, ask_question, etc.) are designed for direct user interaction in the host app.
     # Auto-allow immediately so the native IDE/terminal input modal appears seamlessly with full keyboard focus.
@@ -618,15 +632,12 @@ def main():
         }
 
         # Try Unix domain socket first, fallback to HTTP 127.0.0.1:9191
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"SENDING ASK: {ask_data.get('command')}, risk={risk}\n")
+        debug_log(f"SENDING ASK: {ask_data.get('command')}, risk={risk}\n")
         resp = send_via_socket(ask_data, socket_path)
-        with open('/tmp/sentinel_hook.log', 'a') as f:
-            f.write(f"SOCKET RESP: {resp}\n")
+        debug_log(f"SOCKET RESP: {resp}\n")
         if not resp:
             resp = send_via_http(ask_data)
-            with open('/tmp/sentinel_hook.log', 'a') as f:
-                f.write(f"HTTP RESP: {resp}\n")
+            debug_log(f"HTTP RESP: {resp}\n")
 
         # If daemon was offline, automatically launch loggdin and retry once
         if not resp:

@@ -1200,10 +1200,17 @@ final class PermissionPopupController {
 
         // Prioritize the screen the user is actively working on (mouse cursor location)
         let mouseLoc = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouseLoc, $0.frame, false) }
+        // No attached display (e.g. closed-lid Mac with display asleep): indexing screens[0]
+        // would crash, so fall back to the "no decision" path instead.
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLoc, $0.frame, false) })
             ?? NSScreen.main
-            ?? NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
-            ?? NSScreen.screens[0]
+            ?? NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+            ?? NSScreen.screens.first else {
+            self.activeRequest = nil
+            self.activeModel = nil
+            completion(.timeout)
+            return
+        }
 
         let geometry = IslandScreenGeometry(screen: screen)
         SoundEngine.shared.playPopup()
