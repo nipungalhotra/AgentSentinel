@@ -464,7 +464,9 @@ final class LocalIPCServer {
             return
         }
 
-        let thread = Thread { [weak self] in
+        // The accept loop runs off the main actor; hand each client to the main-actor singleton
+        // instead of capturing `self` across threads (Swift 6 region isolation rejects that).
+        let thread = Thread {
             while true {
                 let clientFD = Darwin.accept(fd, nil, nil)
                 guard clientFD >= 0 else { break }
@@ -478,7 +480,7 @@ final class LocalIPCServer {
                 }
 
                 Task { @MainActor in
-                    self?.handleUnixClient(clientFD)
+                    LocalIPCServer.shared.handleUnixClient(clientFD)
                 }
             }
         }

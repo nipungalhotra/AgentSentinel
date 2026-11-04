@@ -73,7 +73,7 @@ async function runTests() {
 
     // 4. Guard Approved Execution
     responseAllowed = true;
-    const proc = await guard("node -e 'console.log(\"node-sdk-ok\")'", { requestedBy: 'Tester' });
+    const proc = await guard(`node -e "console.log('node-sdk-ok')"`, { requestedBy: 'Tester' }); // quoting valid in sh and cmd.exe
     assert.ok(proc.stdout.includes('node-sdk-ok'), 'guard stdout should include output');
     console.log('✓ test_guard_execution_success passed');
 
