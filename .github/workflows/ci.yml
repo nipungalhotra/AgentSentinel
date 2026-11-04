@@ -14,16 +14,29 @@ concurrency:
 jobs:
   build-and-test:
     name: Build, Test & Package on macOS
-    runs-on: macos-14
+    # Needs the macOS 26+ SDK (Liquid Glass APIs, SwiftUI main-actor isolation).
+    # The app itself still deploys to macOS 14 via #available guards.
+    runs-on: macos-15
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Swift
-        uses: swift-actions/setup-swift@v2
+      - name: Select Xcode (macOS 26+ SDK)
+        uses: maxim-lobanov/setup-xcode@v1
         with:
-          swift-version: "6.0"
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          SDK=$(xcrun --show-sdk-version)
+          echo "macOS SDK: $SDK"
+          if [ "${SDK%%.*}" -lt 26 ]; then
+            echo "::error::macOS SDK $SDK is too old; Loggdin needs the macOS 26+ SDK"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
