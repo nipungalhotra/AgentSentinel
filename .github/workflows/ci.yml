@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
@@ -53,3 +58,12 @@ jobs:
           lipo -archs dist/Loggdin.app/Contents/MacOS/loggdin | grep -q x86_64
           lipo -archs dist/Loggdin.app/Contents/MacOS/loggdin | grep -q arm64
           codesign --verify --strict --verbose=2 dist/Loggdin.app
+
+      - name: Upload Release Artifact (DMG)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Loggdin-macOS-universal
+          path: dist/Loggdin.dmg
+          retention-days: 14
+          if-no-files-found: error
+

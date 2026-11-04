@@ -29,6 +29,28 @@ def get_sentinel_url(endpoint: str = "ask") -> str:
 
 SENTINEL_URL = get_sentinel_url()
 
+def is_daemon_running() -> bool:
+    """
+    Checks if the local loggdin / AgentSentinel daemon is active and responding.
+    """
+    try:
+        url = get_sentinel_url("status")
+        with urllib.request.urlopen(url, timeout=1.5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+def get_daemon_status() -> dict:
+    """
+    Returns diagnostic information from the local loggdin daemon (port, active socket, grants).
+    """
+    try:
+        url = get_sentinel_url("status")
+        with urllib.request.urlopen(url, timeout=2.0) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {"status": "offline", "error": str(e)}
+
 def ask_permission(
     command: str,
     title: str = None,
