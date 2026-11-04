@@ -647,7 +647,10 @@ class Daemon:
                     return False
                 for h in ("Origin", "Referer"):
                     v = self.headers.get(h)
-                    if v and v != "null" and not (v.startswith(f"http://127.0.0.1:{daemon.port}") or v.startswith(f"http://localhost:{daemon.port}")):
+                    # Any loopback port is fine (SSH/Docker port forwards land on a different port);
+                    # cross-site writes are already impossible because they need the token header.
+                    loopback = urlparse(v).hostname in ("127.0.0.1", "localhost") if v else False
+                    if v and v != "null" and not (loopback and v.startswith("http://")):
                         self._send(403, {"error": f"Forbidden: cross-origin {h.lower()} rejected"})
                         return False
                 return True
@@ -774,9 +777,12 @@ class Daemon:
                 break
             except OSError as e:
                 last_err = e
-                if p == self.port and is_running(p):
+                # Only treat the port as ours if the listener proves it knows our token; another
+                # program (or another user) on the port must not stop us from starting.
+                if verify_daemon(p, self.token):
                     log(f"loggdin is already running on port {p}.")
                     return 0
+                log(f"port {p} is in use by another program; trying {p + 1}")
         if not self.httpd:
             log(f"could not bind 127.0.0.1:{self.port}-{self.port + PORT_RANGE - 1}: {last_err}")
             return 1
@@ -843,6 +849,11 @@ def http(method, path, body=None, timeout=5.0, port=None):
 
 
 def is_running(port=None):
+    """True if OUR loggdin answers on the port (verified with the token once one exists)."""
+    port = port or get_port()
+    tok = get_token()
+    if tok:
+        return verify_daemon(port, tok)
     code, body = http("GET", "/status", timeout=1.0, port=port)
     return code == 200 and isinstance(body, dict) and body.get("status") == "active"
 
@@ -1112,6 +1123,14 @@ def uninstall_target(target):
 TARGETS = ("claude", "codex", "antigravity", "cursor", "cowork", "copilot")
 
 
+def is_target_installed(t):
+    paths = {"claude": home(".claude", "settings.json"), "codex": home(".codex", "hooks.json"),
+             "antigravity": home(".gemini", "config", "hooks.json"), "cursor": home(".cursor", "mcp.json"),
+             "cowork": claude_desktop_config(), "copilot": home(".copilot", "hooks", "sentinel.json")}
+    text = read_text(paths[t])
+    return t == "copilot" and bool(text) or "sentinel-hook" in text or '"sentinel"' in text or '"loggdin"' in text
+
+
 def detected_targets():
     """Agents whose config folder already exists on this machine."""
     found = []
@@ -1272,6 +1291,10 @@ def main(argv=None):
         return 0
     if cmd == "status":
         code, body = http("GET", "/status", timeout=2)
+        if code == 200 and get_token() and not verify_daemon(get_port(), get_token()):
+            print(f"⚠️  Port {get_port()} is answered by another program, not your loggdin.\n"
+                  "Run 'loggdin start' to start loggdin on a free port.")
+            return 7
         if code == 200:
             print("🛡️ loggdin Status: ONLINE")
             print(json.dumps(body, indent=4))
@@ -1316,6 +1339,8 @@ def main(argv=None):
             print("No supported agents detected (Claude Code, Codex, Antigravity, Cursor, Claude Desktop, Copilot).")
         failed = 0
         for t in targets:
+            if cmd == "uninstall" and target == "all" and not is_target_installed(t):
+                continue
             try:
                 (install_target if cmd == "install" else uninstall_target)(t)
                 print(f"✓ {cmd}ed {t}")

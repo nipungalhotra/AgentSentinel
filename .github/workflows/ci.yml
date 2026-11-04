@@ -152,6 +152,17 @@ jobs:
           if (Test-Path $cli) { throw 'CLI shim not removed' }
           if (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name loggdin -ErrorAction SilentlyContinue) { throw 'autostart not removed' }
 
+      - name: End-user scenario (Linux, from the portable zip)
+        if: runner.os == 'Linux'
+        run: |
+          ./packaging/create_portable.sh
+          LOGGDIN_ZIP="$(ls $PWD/dist/loggdin-portable-v*.zip | head -1)" sh tests/linux_scenario.sh
+
+      - name: End-user scenario (Windows, cmd.exe + Git Bash)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows_scenario.ps1
+
       - name: Build portable package
         if: runner.os == 'Linux' && matrix.python == '3.13'
         run: ./packaging/create_portable.sh

@@ -493,13 +493,20 @@ def launch_daemon():
             else:
                 kw['start_new_session'] = True
             subprocess.Popen([py, script, 'daemon'], **kw)
-            for _ in range(15):
+            # Wait for OUR daemon: its private socket, or a port that proves our token.
+            # (Any HTTP 200 is not enough: another program may be squatting the default port.)
+            for _ in range(25):
                 time.sleep(0.2)
-                try:
-                    with urllib.request.urlopen(f"http://127.0.0.1:{get_sentinel_port()}/status", timeout=0.5):
-                        return True
-                except Exception:
-                    pass
+                if not IS_WINDOWS and os.path.exists(SOCKET_PATH):
+                    return True
+                token = ''
+                for tp in _state_files('token'):
+                    if os.path.exists(tp):
+                        with open(tp) as f:
+                            token = f.read().strip()
+                        break
+                if token and verify_daemon(get_sentinel_port(), token):
+                    return True
             return False
     return False
 
