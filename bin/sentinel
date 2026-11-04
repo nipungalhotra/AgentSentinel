@@ -2,7 +2,7 @@
 
 # Agent Sentinel Universal CLI & Agent Dispatcher
 # Supports: Claude Code, Cowork, Antigravity IDE, Cursor, Codex, ChatGPT, Copilot, and ZSH Shells.
-# Modeled after Coucou (https://github.com/Louis-CFM/coucou) architecture
+# loggdin architecture (https://github.com/nipungalhotra/AgentSentinel)
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -168,7 +168,7 @@ with open(path, 'w') as f: json.dump(data, f, indent=2)
 print('✓ Updated ' + path)
 "
 
-  # 3. Claude Code settings.json Native Hooks (Coucou parity)
+  # 3. Claude Code settings.json Native Hooks
   CLAUDE_SETTINGS="$HOME/.claude/settings.json"
   mkdir -p "$HOME/.claude"
   python3 -c "
@@ -460,7 +460,7 @@ case "$1" in
     esac
     ;;
   help|--help|-h|"")
-    echo "Agent Sentinel Universal CLI (Coucou-parity)"
+    echo "Agent Sentinel Universal CLI (loggdin)"
     echo ""
     echo "Usage:"
     echo "  sentinel run <command>       Guards a command with the Liquid Glass notch popup"

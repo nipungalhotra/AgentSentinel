@@ -765,7 +765,7 @@ add-zsh-hook preexec sentinel_preexec
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Universal AI Agent Hub & Integrations")
                         .font(.system(size: 18, weight: .bold))
-                    Text("Inspired by Coucou: seamlessly intercepts actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
+                    Text("Powered by loggdin: seamlessly intercepts actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
                         .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
                 }
