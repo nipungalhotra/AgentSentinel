@@ -159,22 +159,49 @@ final class LocalIPCServer {
         readData(from: connection)
     }
 
-    private func readData(from connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, _ in
+    private func readData(from connection: NWConnection, buffer: Data = Data()) {
+        // Accumulate until the headers and the full Content-Length body have arrived (a single
+        // receive used to cap requests at 64 KB, truncating large permission requests).
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             Task { @MainActor in
-                guard let self, let data = data, !data.isEmpty else {
-                    if isComplete { connection.cancel() }
+                guard let self else { return }
+                var buf = buffer
+                if let data { buf.append(data) }
+
+                if buf.count > 2_000_000 {
+                    self.sendHTTPResponse(connection: connection, status: "413 Payload Too Large", json: "{\"error\":\"Request too large\"}")
                     return
                 }
-
-                guard let requestString = String(data: data, encoding: .utf8) else {
+                if !LocalIPCServer.isCompleteHTTPRequest(buf) && !isComplete && error == nil {
+                    self.readData(from: connection, buffer: buf)
+                    return
+                }
+                guard !buf.isEmpty else {
+                    connection.cancel()
+                    return
+                }
+                guard let requestString = String(data: buf, encoding: .utf8) else {
                     self.sendHTTPResponse(connection: connection, status: "400 Bad Request", json: "{\"error\":\"Invalid UTF-8\"}")
                     return
                 }
-
                 self.processHTTPRequest(requestString, connection: connection)
             }
         }
+    }
+
+    /// True once `data` holds the complete header block plus `Content-Length` bytes of body.
+    nonisolated static func isCompleteHTTPRequest(_ data: Data) -> Bool {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: separator) else { return false }
+        let headerText = String(decoding: data[data.startIndex..<range.lowerBound], as: UTF8.self)
+        var contentLength = 0
+        for line in headerText.components(separatedBy: "\r\n") {
+            let kv = line.split(separator: ":", maxSplits: 1)
+            if kv.count == 2, kv[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
+                contentLength = Int(kv[1].trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+        }
+        return data.count - range.upperBound >= contentLength
     }
 
     private func processHTTPRequest(_ raw: String, connection: NWConnection) {

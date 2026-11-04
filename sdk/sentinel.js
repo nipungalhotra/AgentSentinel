@@ -28,6 +28,30 @@ function readStateFile(name) {
   return '';
 }
 
+function verifyDaemon(port, token) {
+  // Resolves 'ok' when the server on `port` proves it knows `token` (HMAC challenge on /status),
+  // 'down' when nothing answers, 'mismatch' otherwise. The token is only sent after 'ok', so
+  // another local user squatting the port cannot collect it.
+  const crypto = require('crypto');
+  const challenge = crypto.randomBytes(16).toString('hex');
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: '127.0.0.1', port, path: `/status?challenge=${challenge}`, timeout: 2000 }, (res) => {
+      let d = '';
+      res.on('data', (c) => { d += c; });
+      res.on('end', () => {
+        try {
+          const proof = String(JSON.parse(d).proof || '');
+          const expected = crypto.createHmac('sha256', token).update('loggdin-status:' + challenge).digest('hex');
+          const a = Buffer.from(proof), b = Buffer.from(expected);
+          resolve(a.length === b.length && crypto.timingSafeEqual(a, b) ? 'ok' : 'mismatch');
+        } catch { resolve('mismatch'); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve('down'); });
+    req.on('error', () => resolve('down'));
+  });
+}
+
 function launchDaemon() {
   // Start loggdin if it is not running: Loggdin.app on macOS, loggdin.py elsewhere.
   const { spawn } = require('child_process');
@@ -77,11 +101,8 @@ function askPermission({
       forcePrompt
     });
 
-    const fs = require('fs');
-    const path = require('path');
-    const os = require('os');
-    let token = '';
-    token = readStateFile('token');
+    const token = readStateFile('token');
+    const send = () => {
 
     const headers = {
       'Content-Type': 'application/json',
@@ -112,6 +133,9 @@ function askPermission({
     req.on('error', () => resolve(false));
     req.write(postData);
     req.end();
+    };
+    if (!token) return send();
+    verifyDaemon(getSentinelPort(), token).then((state) => (state === 'ok' ? send() : resolve(false)));
   });
 }
 

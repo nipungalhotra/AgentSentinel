@@ -312,6 +312,19 @@ loggdin includes an automated test suite across 6 test suites covering security,
 
 ---
 
+## 🚢 Releasing
+
+Pushing a tag such as `v1.2.1` runs `.github/workflows/release.yml`. It builds a Developer ID-signed,
+notarized and stapled DMG, plus the Windows/Linux portable zip, checks that Gatekeeper accepts the
+DMG, and publishes a GitHub release. It refuses to publish an unsigned build.
+
+One-time setup: add these repository secrets: `MACOS_CERTIFICATE` (base64 of your
+"Developer ID Application" .p12), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`,
+`APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` (an app-specific password).
+
+Per release: bump the version in `packaging/Info.plist`, `bin/loggdin.py` and the casks, push the tag,
+then copy the SHA-256 shown in the workflow summary into the casks' `sha256`.
+
 ## 🛡️ Production Error Handling & Logging
 
 ### Atomic Persistence & Crash Recovery

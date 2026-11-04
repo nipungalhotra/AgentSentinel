@@ -30,6 +30,30 @@ function readStateFile(name) {
   return '';
 }
 
+function verifyDaemon(port, token) {
+  // Resolves 'ok' when the server on `port` proves it knows `token` (HMAC challenge on /status),
+  // 'down' when nothing answers, 'mismatch' otherwise. The token is only sent after 'ok', so
+  // another local user squatting the port cannot collect it.
+  const crypto = require('crypto');
+  const challenge = crypto.randomBytes(16).toString('hex');
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: '127.0.0.1', port, path: `/status?challenge=${challenge}`, timeout: 2000 }, (res) => {
+      let d = '';
+      res.on('data', (c) => { d += c; });
+      res.on('end', () => {
+        try {
+          const proof = String(JSON.parse(d).proof || '');
+          const expected = crypto.createHmac('sha256', token).update('loggdin-status:' + challenge).digest('hex');
+          const a = Buffer.from(proof), b = Buffer.from(expected);
+          resolve(a.length === b.length && crypto.timingSafeEqual(a, b) ? 'ok' : 'mismatch');
+        } catch { resolve('mismatch'); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve('down'); });
+    req.on('error', () => resolve('down'));
+  });
+}
+
 function launchDaemon() {
   // Start loggdin if it is not running: Loggdin.app on macOS, loggdin.py elsewhere.
   const { spawn } = require('child_process');
@@ -58,67 +82,44 @@ function getSentinelToken() {
 }
 
 function requestSentinel(payload) {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify(payload);
-    const token = getSentinelToken();
-    const headers = {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(postData)
-    };
-    if (token) {
-      headers['X-Loggdin-Token'] = token;
-    }
-    const options = {
-      hostname: '127.0.0.1',
-      port: getSentinelPort(),
-      path: '/ask',
-      method: 'POST',
-      headers: headers,
-      timeout: 60000 // 60s timeout matching popup max duration
-    };
-
-    const req = http.request(options, (res) => {
+  const postData = JSON.stringify(payload);
+  const post = (token) => new Promise((resolve) => {
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) };
+    if (token) headers['X-Loggdin-Token'] = token;
+    const req = http.request({
+      hostname: '127.0.0.1', port: getSentinelPort(), path: '/ask', method: 'POST', headers,
+      timeout: 120000
+    }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          resolve(parsed);
-        } catch (e) {
-          resolve({ allowed: false, decision: 'error', error: data });
-        }
+        try { resolve(JSON.parse(data)); } catch { resolve({ allowed: false, decision: 'error', error: data }); }
       });
     });
-
-    req.on('error', (err) => {
-      // If Sentinel is not running, attempt to launch it
-      if (err.code === 'ECONNREFUSED') {
-        try {
-          launchDaemon();
-          // Wait 1.5s and retry once
-          setTimeout(() => {
-            const retryReq = http.request(options, (res2) => {
-              let d = '';
-              res2.on('data', (c) => { d += c; });
-              res2.on('end', () => {
-                try { resolve(JSON.parse(d)); } catch { resolve({ allowed: false, decision: 'deny' }); }
-              });
-            });
-            retryReq.on('error', () => resolve({ allowed: false, error: 'AgentSentinel daemon is offline. Launch Agent Sentinel.' }));
-            retryReq.write(postData);
-            retryReq.end();
-          }, 1500);
-          return;
-        } catch {
-          // ignore
-        }
-      }
-      resolve({ allowed: false, error: `Sentinel connection error: ${err.message}` });
-    });
-
+    req.on('timeout', () => { req.destroy(); resolve({ allowed: false, decision: 'timeout' }); });
+    req.on('error', (err) => resolve({ allowed: false, error: `loggdin connection error: ${err.message}` }));
     req.write(postData);
     req.end();
   });
+
+  const attempt = async (retry) => {
+    const token = getSentinelToken();
+    if (token) {
+      const state = await verifyDaemon(getSentinelPort(), token);
+      if (state === 'down' && retry) {
+        launchDaemon();   // start loggdin, then try once more
+        await new Promise((r) => setTimeout(r, 1500));
+        return attempt(false);
+      }
+      if (state !== 'ok') {
+        return { allowed: false, error: state === 'down'
+          ? 'loggdin daemon is offline. Start Loggdin (macOS) or run `loggdin start`.'
+          : 'The process on the loggdin port failed its identity check; refusing to send the token.' };
+      }
+    }
+    return post(token);
+  };
+  return attempt(true);
 }
 
 const TOOLS = [

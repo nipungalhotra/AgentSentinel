@@ -332,6 +332,36 @@ class CrossPlatformDaemonTest(unittest.TestCase):
                            input=payload, capture_output=True, text=True, timeout=30)
         self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["decision"]["behavior"], "deny")
 
+    def test_mcp_server_against_real_daemon(self):
+        if not shutil.which("node"):
+            self.skipTest("node not installed")
+        mcp = os.path.join(ROOT, "bin", "sentinel-mcp.js")
+        p = subprocess.Popen(["node", mcp], env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        try:
+            def call(msg):
+                p.stdin.write(json.dumps(msg) + "\n")
+                p.stdin.flush()
+            call({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                  "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})
+            p.stdout.readline()
+            call({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                  "params": {"name": "sentinel_request_permission", "arguments": {"command": "echo via-mcp", "risk": "low"}}})
+            for _ in range(100):
+                pend = self.req("GET", "/pending")[1]
+                if pend.get("hasPending") and pend.get("command") == "echo via-mcp":
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("MCP request never reached the daemon (identity check against real daemon failed?)")
+            self.req("POST", "/decision", {"decision": "allow", "scope": "once", "requestId": pend["id"]})
+            reply = json.loads(p.stdout.readline())
+            self.assertIn("result", reply, reply)
+            self.assertIn("approved", json.dumps(reply).lower())
+        finally:
+            p.kill()
+            p.communicate(timeout=10)
+
     # -- CLI --
     def test_cli_status_and_deny_message(self):
         r = self.cli("status")

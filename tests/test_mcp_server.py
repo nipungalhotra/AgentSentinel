@@ -50,8 +50,10 @@ class TestMCPServer(unittest.TestCase):
         cls.server.server_close()
 
     def test_mcp_handshake_and_tools(self):
+        import tempfile
         env = os.environ.copy()
         env["LOGGDIN_PORT"] = str(self.port)
+        env["LOGGDIN_HOME"] = tempfile.mkdtemp()   # hermetic: no real token on this machine
 
         proc = subprocess.Popen(
             ["node", MCP_SCRIPT],

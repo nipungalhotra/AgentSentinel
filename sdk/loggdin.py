@@ -28,6 +28,22 @@ def _state_files(name):
     return files + [os.path.join(_state_dir(), name)]
 
 
+def _verify_daemon(target_url, token):
+    """True if the server behind target_url proves it knows `token` (HMAC challenge on /status).
+    Prevents handing the token to another local user's process squatting the port."""
+    import hashlib, hmac, secrets
+    from urllib.parse import urlsplit
+    parts = urlsplit(target_url)
+    challenge = secrets.token_hex(16)
+    try:
+        with urllib.request.urlopen(f"{parts.scheme}://{parts.netloc}/status?challenge={challenge}", timeout=2) as r:
+            proof = json.loads(r.read().decode("utf-8")).get("proof", "")
+    except Exception:
+        return False
+    expected = hmac.new(token.encode("utf-8"), ("loggdin-status:" + challenge).encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(str(proof), expected)
+
+
 def _launch_daemon():
     """Start loggdin if it is not running (Loggdin.app on macOS, loggdin.py elsewhere)."""
     if sys.platform == "darwin":
@@ -121,13 +137,18 @@ def ask_permission(
     try:
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
+        token = ""
         token_path = next((t for t in _state_files("token") if os.path.exists(t)), "")
-        if os.path.exists(token_path):
+        if token_path:
             try:
                 with open(token_path) as f:
-                    headers["X-Loggdin-Token"] = f.read().strip()
+                    token = f.read().strip()
             except Exception:
                 pass
+        if token:
+            if not _verify_daemon(get_loggdin_url("ask"), token):
+                return False   # not the real loggdin daemon: never send it our token
+            headers["X-Loggdin-Token"] = token
 
         target_url = get_loggdin_url("ask")
         req = urllib.request.Request(

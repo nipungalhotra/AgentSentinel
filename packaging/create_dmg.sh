@@ -18,6 +18,7 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJ
 # Optional release signing / notarization (required for smooth installs on other Macs):
 #   CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 #   NOTARY_PROFILE="loggdin-notary"   # created once with: xcrun notarytool store-credentials
+#   NOTARY_KEYCHAIN=/path/to.keychain  # optional: keychain holding that profile (CI)
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 
@@ -150,7 +151,7 @@ if [ -n "$CODESIGN_IDENTITY" ]; then
     codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$DMG_OUTPUT"
     if [ -n "$NOTARY_PROFILE" ]; then
         echo "📨 Submitting DMG to Apple notary service (this can take a few minutes)..."
-        xcrun notarytool submit "$DMG_OUTPUT" --keychain-profile "$NOTARY_PROFILE" --wait
+        xcrun notarytool submit "$DMG_OUTPUT" --keychain-profile "$NOTARY_PROFILE" ${NOTARY_KEYCHAIN:+--keychain "$NOTARY_KEYCHAIN"} --wait
         xcrun stapler staple "$DMG_OUTPUT"
         spctl -a -vvv -t open --context context:primary-signature "$DMG_OUTPUT"
     else
