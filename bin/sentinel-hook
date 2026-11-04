@@ -192,6 +192,10 @@ def debug_log(msg):
     except Exception:
         pass
 
+def is_compound_shell(command):
+    """True when a command chains, pipes, redirects or substitutes other commands."""
+    return any(op in command for op in ('&&', '||', ';', '|', '`', '$(', '>', '<', '\n', '&'))
+
 def check_recent_dedup(tool_name, command):
     try:
         if os.path.exists(DEDUP_CACHE_FILE):
@@ -499,20 +503,38 @@ def launch_daemon():
             return False
     return False
 
+def verify_daemon(port, token):
+    import hmac, hashlib, secrets
+    challenge = secrets.token_hex(16)
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status?challenge={challenge}", timeout=2) as r:
+            proof = json.loads(r.read().decode('utf-8')).get('proof', '')
+    except Exception:
+        return False
+    expected = hmac.new(token.encode('utf-8'), ('loggdin-status:' + challenge).encode('utf-8'), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(str(proof), expected)
+
 def send_via_http(payload, port=None, timeout=120, path='/ask'):
     if port is None:
         port = get_sentinel_port()
     url = f"http://127.0.0.1:{port}{path}"
     req_body = json.dumps(payload).encode('utf-8')
     headers = {'Content-Type': 'application/json'}
+    token = ''
     try:
         for token_path in _state_files('token'):
             if os.path.exists(token_path):
                 with open(token_path) as f:
-                    headers['X-Loggdin-Token'] = f.read().strip()
+                    token = f.read().strip()
                 break
     except Exception:
         pass
+    if token:
+        # Only hand the token to a daemon that proves it already knows it (port-squatting guard).
+        if not verify_daemon(port, token):
+            debug_log(f"HTTP daemon on port {port} failed identity check\n")
+            return None
+        headers['X-Loggdin-Token'] = token
     req = urllib.request.Request(
         url,
         data=req_body,
@@ -603,13 +625,13 @@ def main():
                 sys.exit(0)
             if t_name == 'run_command':
                 cmd_check = extract_command(payload).strip().lower()
-                safe_cmds = (
-                    'git status', 'git diff', 'git log', 'git branch', 'git rev-parse',
-                    'pwd', 'which ', 'echo ', 'ls ', 'swift build', 'swift test',
-                    './packaging/create_dmg.sh', 'hdiutil', 'pkill loggdin', 'open /Applications/Loggdin.app',
-                    'curl -s http://127.0.0.1:9191', 'curl -i -s http://127.0.0.1:9191', './bin/loggdin status'
-                )
-                if any(cmd_check == c.strip() or cmd_check.startswith(c) for c in safe_cmds):
+                # Read-only commands that never need a prompt. Matched as the whole command or the
+                # command plus plain arguments; anything chained/redirected/substituted is asked.
+                safe_with_args = ('git status', 'git diff', 'git log', 'git rev-parse', 'git show', 'pwd', 'which', 'ls')
+                safe_exact = ('git branch',)   # `git branch -D x` deletes branches
+                if not is_compound_shell(cmd_check) and '--output' not in cmd_check and (
+                        cmd_check in safe_exact or
+                        any(cmd_check == c or cmd_check.startswith(c + ' ') for c in safe_with_args)):
                     out = {'decision': 'allow'}
                     sys.stdout.write(json.dumps(out) + '\n')
                     sys.stdout.flush()
@@ -682,8 +704,14 @@ def main():
             'symbol': 'sparkles' if agent == 'antigravity' else ('terminal.fill' if 'Bash' in t_name else 'pencil.and.outline'),
             'tool': t_name,
             'forcePrompt': False,
-            'raw': payload
         }
+        # Keep the request small: the full agent payload (e.g. a whole file for Write) is not
+        # needed by the daemon and used to overflow the Mac app's socket buffer, which then
+        # answered with a silent deny. Cap the free-text fields too.
+        for key, limit in (('command', 8000), ('diffPreview', 16000)):
+            v = ask_data.get(key)
+            if isinstance(v, str) and len(v) > limit:
+                ask_data[key] = v[:limit] + '\n… (truncated)'
 
         # Try Unix domain socket first, fallback to HTTP 127.0.0.1:9191
         debug_log(f"SENDING ASK: {ask_data.get('command')}, risk={risk}\n")
@@ -700,6 +728,10 @@ def main():
                     resp = send_via_socket(ask_data, socket_path) or send_via_http(ask_data)
             except Exception:
                 pass
+
+        # Opt-in fail-closed mode: when no daemon can be reached, deny instead of allowing.
+        if not resp and os.environ.get('LOGGDIN_FAIL_CLOSED') in ('1', 'true', 'yes'):
+            resp = {'allowed': False, 'decision': 'deny'}
 
         if resp:
             allowed = resp.get('allowed', False)

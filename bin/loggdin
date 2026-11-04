@@ -386,8 +386,26 @@ case "$1" in
     shift
     cmd_test "$@"
     ;;
-  install)
-    "$ROOT_DIR/bin/sentinel" install "$2"
+  install|uninstall)
+    # Agent integrations are written by loggdin.py (shared with Windows/Linux and tested).
+    # Note: bin/sentinel is often a symlink/copy of THIS script, so never delegate to it blindly.
+    TARGET="${2:-detected}"
+    if [ "$TARGET" = "zsh" ]; then
+      for c in "$BIN_DIR/sentinel-installer" "$APP_PATH/Contents/Resources/bin/sentinel-installer" "$ROOT_DIR/bin/sentinel"; do
+        if [ -f "$c" ] && ! grep -q "loggdin Universal CLI" "$c" 2>/dev/null; then
+          exec "$c" "$1" zsh
+        fi
+      done
+      echo "loggdin: zsh integration installer not found" >&2
+      exit 1
+    fi
+    for c in "$BIN_DIR/loggdin.py" "$APP_PATH/Contents/Resources/bin/loggdin.py" "$ROOT_DIR/bin/loggdin.py"; do
+      if [ -f "$c" ]; then
+        exec python3 "$c" "$1" "$TARGET"
+      fi
+    done
+    echo "loggdin: installer (loggdin.py) not found next to $BIN_DIR or in $APP_PATH" >&2
+    exit 1
     ;;
   help|--help|-h|"")
     echo "loggdin Universal CLI (Apple Shortcuts & Agent Guard)"
@@ -401,7 +419,8 @@ case "$1" in
     echo "  loggdin test <agent>             Tests live notch popup (antigravity, claude, codex, cursor, cowork)"
     echo "  loggdin mcp                      Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
     echo "  loggdin status                   Displays daemon status"
-    echo "  loggdin install <target>         Installs integration (antigravity, claude, cursor, codex, zsh, all)"
+    echo "  loggdin install <target>         Installs integration (claude, codex, antigravity, cursor, cowork, copilot, zsh, all; default: detected)"
+    echo "  loggdin uninstall <target>       Removes an integration"
     ;;
   *)
     cmd_run "$@"

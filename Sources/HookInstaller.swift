@@ -54,6 +54,23 @@ final class HookInstaller {
         return nil
     }
 
+    /// Absolute path to a real Python 3 for hook commands. Agents run hooks with a minimal PATH,
+    /// and on a Mac without the Command Line Tools /usr/bin/python3 is only a stub that opens an
+    /// "install developer tools" dialog on every call, so prefer real interpreters first.
+    var pythonBinaryPath: String {
+        let candidates = [
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+            "/Library/Developer/CommandLineTools/usr/bin/python3",
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"
+        ]
+        for c in candidates where fileManager.isExecutableFile(atPath: c) {
+            return c
+        }
+        return "/usr/bin/python3"
+    }
+
     private var nodeBinaryPath: String {
         if fileManager.fileExists(atPath: "/opt/homebrew/bin/node") {
             return "/opt/homebrew/bin/node"
@@ -134,7 +151,7 @@ final class HookInstaller {
 
     private func quotedHookCmd(agent: String, event: String? = nil, ask: Bool = false) -> String {
         let path = hookScriptPath.replacingOccurrences(of: "\"", with: "\\\"")
-        var cmd = "python3 \"\(path)\" --agent \(agent)"
+        var cmd = "\"\(pythonBinaryPath)\" \"\(path)\" --agent \(agent)"
         if ask {
             cmd += " --ask"
         }

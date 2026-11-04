@@ -1,5 +1,5 @@
 <#
-  loggdin — Windows installer (per-user, no admin rights needed).
+  loggdin - Windows installer (per-user, no admin rights needed).
 
     powershell -ExecutionPolicy Bypass -File install.ps1              # install + hook detected agents
     powershell -ExecutionPolicy Bypass -File install.ps1 -NoAgents    # don't touch agent configs
@@ -60,7 +60,10 @@ Write-Host "Installing loggdin for Windows with $Python"
 if ($LASTEXITCODE -ne 0) { throw 'deploy failed' }
 
 New-Item -ItemType Directory -Force -Path $ShimDir | Out-Null
-Set-Content -Path $Shim -Encoding ASCII -Value "@echo off`r`n`"$Python`" `"$Script`" %*"
+# Prefer the version-independent py launcher so the command survives Python upgrades.
+$Launcher = Get-Command py -ErrorAction SilentlyContinue
+$Runner = if ($Launcher) { "`"$($Launcher.Source)`" -3" } else { "`"$Python`"" }
+Set-Content -Path $Shim -Encoding ASCII -Value "@echo off`r`n$Runner `"$Script`" %*"
 Write-Host "CLI installed: $Shim"
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

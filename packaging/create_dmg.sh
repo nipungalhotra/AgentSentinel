@@ -81,6 +81,16 @@ if [ -f "$PROJECT_ROOT/bin/sentinel-mcp.js" ]; then
     cp "$PROJECT_ROOT/bin/sentinel-mcp.js" "$APP_BUNDLE/Contents/Resources/sentinel-mcp.js"
     chmod 755 "$APP_BUNDLE/Contents/Resources/bin/sentinel-mcp.js" "$APP_BUNDLE/Contents/Resources/sentinel-mcp.js"
 fi
+if [ -f "$PROJECT_ROOT/bin/loggdin.py" ]; then
+    cp "$PROJECT_ROOT/bin/loggdin.py" "$APP_BUNDLE/Contents/Resources/bin/loggdin.py"
+    chmod 755 "$APP_BUNDLE/Contents/Resources/bin/loggdin.py"
+fi
+# The original sentinel script is kept as sentinel-installer (zsh integration);
+# `sentinel` itself is an alias of the loggdin CLI.
+if [ -f "$PROJECT_ROOT/bin/sentinel" ]; then
+    cp "$PROJECT_ROOT/bin/sentinel" "$APP_BUNDLE/Contents/Resources/bin/sentinel-installer"
+    chmod 755 "$APP_BUNDLE/Contents/Resources/bin/sentinel-installer"
+fi
 ln -sf "loggdin" "$APP_BUNDLE/Contents/Resources/bin/sentinel"
 
 echo "✓ Loggdin.app assembled cleanly at: $APP_BUNDLE"

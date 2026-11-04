@@ -134,19 +134,23 @@ jobs:
           sh packaging/install.sh --uninstall
           test ! -e ~/.local/bin/loggdin
 
-      - name: Installer smoke test (Windows)
+      - name: Installer smoke test (Windows PowerShell 5.1)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell   # the default shell on end-user machines, not pwsh 7
         run: |
-          ./packaging/install.ps1 -NoAgents
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\install.ps1 -NoAgents
+          if ($LASTEXITCODE -ne 0) { throw 'install.ps1 failed' }
           $cli = Join-Path $env:LOCALAPPDATA 'Loggdin\bin\loggdin.cmd'
           & $cli status
           if ($LASTEXITCODE -ne 0) { throw 'daemon not running after install' }
           & $cli doctor
-          $startup = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\loggdin.cmd'
-          if (-not (Test-Path $startup)) { throw 'autostart entry missing' }
-          ./packaging/install.ps1 -Uninstall
+          $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name loggdin -ErrorAction SilentlyContinue
+          if (-not $run) { throw 'autostart entry missing' }
+          if ($run.loggdin -notmatch 'pyw') { throw "autostart should run windowless (pyw/pythonw): $($run.loggdin)" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\install.ps1 -Uninstall
           if (Test-Path $cli) { throw 'CLI shim not removed' }
+          if (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name loggdin -ErrorAction SilentlyContinue) { throw 'autostart not removed' }
 
       - name: Build portable package
         if: runner.os == 'Linux' && matrix.python == '3.13'

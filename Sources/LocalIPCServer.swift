@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import CryptoKit
 
 @MainActor
 final class LocalIPCServer {
@@ -247,16 +248,26 @@ final class LocalIPCServer {
             return
         }
 
-        if method == "GET" && path == "/status" {
+        if method == "GET" && (path == "/status" || path.hasPrefix("/status?")) {
             let grants = RulesEngine.shared.activeGrants.count
             let rules = RulesEngine.shared.storedRules.count
+            // Identity proof: clients send a random challenge and only send their token if we can
+            // HMAC it with the token, so a process squatting this port cannot harvest tokens.
+            var proofField = ""
+            if let q = URLComponents(string: "http://localhost" + path)?.queryItems,
+               let challenge = q.first(where: { $0.name == "challenge" })?.value,
+               (16...128).contains(challenge.count), !authToken.isEmpty {
+                let mac = HMAC<SHA256>.authenticationCode(for: Data(("loggdin-status:" + challenge).utf8),
+                                                          using: SymmetricKey(data: Data(authToken.utf8)))
+                proofField = ",\n    \"proof\": \"" + mac.map { String(format: "%02x", $0) }.joined() + "\""
+            }
             let statusJSON = """
             {
                 "status": "active",
                 "port": \(self.port),
                 "socket": "\(self.socketPath)",
                 "activeGrants": \(grants),
-                "savedRules": \(rules)
+                "savedRules": \(rules)\(proofField)
             }
             """
             sendHTTPResponse(connection: connection, status: "200 OK", json: statusJSON)
@@ -479,8 +490,11 @@ final class LocalIPCServer {
                     continue
                 }
 
+                // Read on this background thread (blocking recv must never run on the main actor),
+                // then hand the finished line to the main actor.
+                let line = LocalIPCServer.readLine(from: clientFD)
                 Task { @MainActor in
-                    LocalIPCServer.shared.handleUnixClient(clientFD)
+                    LocalIPCServer.shared.handleUnixClient(clientFD, line: line)
                 }
             }
         }
@@ -490,20 +504,38 @@ final class LocalIPCServer {
         print("[Sentinel IPC] Unix socket listening on \(path)")
     }
 
-    private func handleUnixClient(_ fd: Int32) {
+    /// Reads one newline-terminated message (max 2 MB) from a connected client.
+    nonisolated private static func readLine(from fd: Int32) -> Data {
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var raw = Data()
-        var buf = [UInt8](repeating: 0, count: 4096)
-        while true {
+        var buf = [UInt8](repeating: 0, count: 65536)
+        while raw.count <= 2_000_000 {
             let n = Darwin.recv(fd, &buf, buf.count, 0)
             if n <= 0 { break }
-            for i in 0..<n {
-                if buf[i] == UInt8(ascii: "\n") { break }
-                raw.append(buf[i])
+            if let nl = buf[0..<n].firstIndex(of: UInt8(ascii: "\n")) {
+                raw.append(contentsOf: buf[0..<nl])
+                break
             }
-            if raw.count > 65536 || buf.contains(UInt8(ascii: "\n")) { break }
+            raw.append(contentsOf: buf[0..<n])
+        }
+        return raw
+    }
+
+    private func handleUnixClient(_ fd: Int32, line raw: Data) {
+        guard !raw.isEmpty, let bodyString = String(data: raw, encoding: .utf8) else {
+            Darwin.close(fd)
+            return
         }
 
-        guard !raw.isEmpty, let bodyString = String(data: raw, encoding: .utf8) else {
+        // Activity notifications from sentinel-hook (SessionStart, PostToolUse, Stop, ...) carry an
+        // "event" key and no "risk". They are not permission requests: acknowledge immediately
+        // instead of queueing a popup and making the agent wait on the hook's socket timeout.
+        if let data = bodyString.data(using: .utf8),
+           let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           obj["event"] != nil, obj["risk"] == nil {
+            let ok = "{\"ok\":true}\n"
+            _ = ok.withCString { Darwin.send(fd, $0, strlen($0), 0) }
             Darwin.close(fd)
             return
         }

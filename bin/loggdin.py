@@ -145,6 +145,11 @@ def get_token():
     return ""
 
 
+def status_proof(token, challenge):
+    """HMAC proving the daemon knows the token, without revealing it (see verify_daemon)."""
+    return hmac.new(token.encode("utf-8"), ("loggdin-status:" + challenge).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def load_or_create_token():
     tok = read_text(token_file())
     if not tok:
@@ -205,9 +210,19 @@ def dir_matches(rule_dir, req_dir):
     return q == r or q.startswith(r.rstrip(os.sep) + os.sep)
 
 
-def cmd_matches(pattern, cmd):
+def is_compound_shell(cmd):
+    """Chained, piped, redirected or substituted commands: an approved prefix could smuggle more in."""
+    return any(op in cmd for op in ("&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "&"))
+
+
+def cmd_matches(pattern, cmd, risk="low"):
+    """Exact command always; the same command with extra plain arguments only for non-high risk."""
     p, c = pattern.strip(), cmd.strip()
-    return bool(p) and (c == p or c.startswith(p + " "))
+    if not p:
+        return False
+    if c == p:
+        return True
+    return risk != "high" and not is_compound_shell(c) and c.startswith(p + " ")
 
 
 class Store:
@@ -239,13 +254,13 @@ class Store:
             self.grants = [g for g in self.grants if g["expires"] > now]
             if is_catastrophic(cmd):      # always needs a human, even right after an approval
                 return None
-            if now - self.recent.get(cmd, 0) < DEDUP_SECONDS:
+            if now - self.recent.get((req["directory"], cmd), 0) < DEDUP_SECONDS:
                 return {"type": "allow", "scope": "once"}
             for g in self.grants:
-                if cmd_matches(g["pattern"], cmd) and dir_matches(g["directory"], req["directory"]):
+                if cmd_matches(g["pattern"], cmd, req["risk"]) and dir_matches(g["directory"], req["directory"]):
                     return {"type": "allow", "scope": "tenMinutes"}
             for r in self.rules:
-                if cmd_matches(r.get("pattern", ""), cmd) and dir_matches(r.get("directory"), req["directory"]):
+                if cmd_matches(r.get("pattern", ""), cmd, req["risk"]) and dir_matches(r.get("directory"), req["directory"]):
                     return {"type": "allow", "scope": "always"}
         return None
 
@@ -254,7 +269,7 @@ class Store:
             return
         cmd, scope = req["command"], decision.get("scope", "once")
         with self.lock:
-            self.recent[cmd] = time.time()
+            self.recent[(req["directory"], cmd)] = time.time()
             if scope == "tenMinutes":
                 self.grants.append({"pattern": cmd, "directory": req["directory"],
                                     "expires": time.time() + GRANT_SECONDS})
@@ -673,7 +688,11 @@ class Daemon:
                 u = urlparse(self.path)
                 qs = parse_qs(u.query)
                 if u.path == "/status":
-                    return self._send(200, daemon.status())
+                    st = daemon.status()
+                    challenge = (qs.get("challenge") or [""])[0]
+                    if 16 <= len(challenge) <= 128:
+                        st["proof"] = status_proof(daemon.token, challenge)
+                    return self._send(200, st)
                 if u.path in ("/", "/ui"):
                     nonce = secrets.token_urlsafe(16)
                     csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
@@ -785,13 +804,27 @@ class Daemon:
 # Client helpers
 # ---------------------------------------------------------------------------
 
+def verify_daemon(port, token):
+    """True if whatever listens on `port` knows our token. Another local user could otherwise
+    squat the port while loggdin is down, collect the token and answer "allow"."""
+    challenge = secrets.token_hex(16)
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status?challenge={challenge}", timeout=2) as r:
+            proof = json.loads(r.read().decode("utf-8")).get("proof", "")
+    except Exception:
+        return False
+    return hmac.compare_digest(str(proof), status_proof(token, challenge))
+
+
 def http(method, path, body=None, timeout=5.0, port=None):
     port = port or get_port()
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method)
     req.add_header("Content-Type", "application/json")
     tok = get_token()
-    if tok:
+    if tok and path != "/status":
+        if not verify_daemon(port, tok):
+            return None, None
         req.add_header("X-Loggdin-Token", tok)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -901,10 +934,33 @@ def fwd(p):
     return p.replace("\\", "/") if IS_WINDOWS else p
 
 
+def stable_python():
+    """Interpreter command for hooks that survives upgrades.
+
+    sys.executable is often a versioned path (Homebrew's .../python@3.14/bin/python3.14) that
+    disappears on the next upgrade, so prefer a stable launcher that points at a working Python:
+    the Windows `py` launcher, or a python3 symlink on PATH / in a standard location.
+    """
+    if IS_WINDOWS:
+        launcher = shutil.which("py")
+        if launcher:
+            return [launcher, "-3"]
+        return [python_exe()]
+    current = os.path.realpath(sys.executable or "")
+    candidates = [shutil.which("python3"), "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+    for c in candidates:
+        if c and os.path.exists(c) and os.path.realpath(c) == current:
+            return [c]
+    return [python_exe()]
+
+
 def hook_cmd(agent, event=None, ask=False):
     hook = fwd(os.path.join(install_dir(), "sentinel-hook"))
-    py = fwd(python_exe()) if IS_WINDOWS else "python3"
-    cmd = f'"{py}" "{hook}" --agent {agent}' if IS_WINDOWS else f'{py} "{hook}" --agent {agent}'
+    # Absolute interpreter: agents run hooks with a minimal PATH (and macOS's /usr/bin/python3
+    # may be a stub that only offers to install developer tools).
+    py = stable_python()
+    exe = " ".join([f'"{fwd(py[0])}"'] + py[1:])
+    cmd = f'{exe} "{hook}" --agent {agent}'
     if ask:
         cmd += " --ask"
     if event:
@@ -1071,13 +1127,36 @@ def detected_targets():
 # Autostart
 # ---------------------------------------------------------------------------
 
+WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _win_run_name():
+    return os.environ.get("LOGGDIN_AUTOSTART_NAME", "loggdin")
+
+
 def autostart_path():
     if IS_WINDOWS:
-        return os.path.join(os.environ.get("APPDATA") or home("AppData", "Roaming"),
-                            "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "loggdin.cmd")
+        return "HKCU\\" + WIN_RUN_KEY + "\\" + _win_run_name()
     if IS_MAC:
         return home("Library", "LaunchAgents", "dev.loggdin.daemon.plist")
     return os.path.join(os.environ.get("XDG_CONFIG_HOME") or home(".config"), "autostart", "loggdin.desktop")
+
+
+def _legacy_win_startup_cmd():
+    return os.path.join(os.environ.get("APPDATA") or home("AppData", "Roaming"),
+                        "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "loggdin.cmd")
+
+
+def autostart_enabled():
+    if IS_WINDOWS:
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, WIN_RUN_KEY) as k:
+                winreg.QueryValueEx(k, _win_run_name())
+            return True
+        except OSError:
+            return False
+    return os.path.exists(autostart_path())
 
 
 def set_autostart(on):
@@ -1085,14 +1164,30 @@ def set_autostart(on):
     script = os.path.join(install_dir(), "loggdin.py")
     if not os.path.exists(script):
         script = os.path.abspath(__file__)
+    if IS_WINDOWS:
+        # Per-user Run key with pythonw: starts at login without a console window flashing up
+        # (unlike a .cmd in the Startup folder, which older versions used and we clean up).
+        import winreg
+        legacy = _legacy_win_startup_cmd()
+        if os.path.exists(legacy):
+            os.remove(legacy)
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, WIN_RUN_KEY) as k:
+            if on:
+                pyw = shutil.which("pyw")   # version-independent launcher survives Python upgrades
+                runner = f'"{pyw}" -3' if pyw else f'"{python_exe(windowed=True)}"'
+                winreg.SetValueEx(k, _win_run_name(), 0, winreg.REG_SZ, f'{runner} "{script}" daemon')
+            else:
+                try:
+                    winreg.DeleteValue(k, _win_run_name())
+                except OSError:
+                    pass
+        return path
     if not on:
         if os.path.exists(path):
             os.remove(path)
         return path
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if IS_WINDOWS:
-        content = f'@echo off\r\nstart "" "{python_exe(windowed=True)}" "{script}" daemon\r\n'
-    elif IS_MAC:
+    if IS_MAC:
         content = (f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
                    f'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>'
                    f'<key>Label</key><string>dev.loggdin.daemon</string><key>ProgramArguments</key><array>'
@@ -1152,7 +1247,7 @@ def doctor():
                  ("antigravity", home(".gemini", "config", "hooks.json")), ("cursor", home(".cursor", "mcp.json"))):
         installed = os.path.exists(p) and ("sentinel-hook" in read_text(p) or '"sentinel"' in read_text(p))
         print(f"  {t:<10}: {'installed' if installed else '-'}")
-    print(f"  autostart : {'on' if os.path.exists(autostart_path()) else 'off'}  ({autostart_path()})")
+    print(f"  autostart : {'on' if autostart_enabled() else 'off'}  ({autostart_path()})")
     return 0 if ok else 1
 
 
