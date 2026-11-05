@@ -127,6 +127,29 @@ typography:
   code:
     fontFamily: "ui-monospace, SF Mono, Menlo, Consolas, monospace"
     fontSize: "0.88em"
+  hub-name:
+    fontFamily: "Archivo, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "1.15rem"
+    fontWeight: 700
+    lineHeight: 1.05
+    letterSpacing: "-0.02em"
+  title-md:
+    fontFamily: "Archivo, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "1.35rem"
+    fontWeight: 640
+    lineHeight: 1.05
+    letterSpacing: "-0.02em"
+  title-legal:
+    fontFamily: "Archivo, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "1.4rem"
+    fontWeight: 640
+    lineHeight: 1.05
+    letterSpacing: "-0.02em"
+  terminal-phone:
+    fontFamily: "ui-monospace, SF Mono, Menlo, monospace"
+    fontSize: "11px"
+    fontWeight: 400
+    lineHeight: 1.7
 rounded:
   hairline-bar: "1px"
   code: "4px"
