@@ -10,7 +10,14 @@
   <meta property="og:title" content="loggdin: every AI agent asks first">
   <meta property="og:description" content="One permission gate for all your AI coding agents. Allow once, for 10 minutes, or always, from a card under the notch.">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="img/logo-256.png">
+  <meta property="og:image" content="https://nipungalhotra.github.io/AgentSentinel/img/og-card.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:url" content="https://nipungalhotra.github.io/AgentSentinel/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="loggdin: every AI agent asks first">
+  <meta name="twitter:description" content="One permission gate for all your AI coding agents. Allow once, for 10 minutes, or always, from a card under the notch.">
+  <meta name="twitter:image" content="https://nipungalhotra.github.io/AgentSentinel/img/og-card.jpg">
   <link rel="icon" href="img/favicon-64.png" type="image/png">
   <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
   <link rel="preload" href="fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
@@ -52,6 +59,7 @@
               <button type="submit" class="key key-signal"><span>Join the waitlist</span></button>
             </div>
             <p class="form-note" id="waitlist-status" role="status" aria-live="polite">Free during the beta. We'll email you when the signed Mac app is ready, and nothing else.</p>
+            <p class="form-alt">Can't wait? <a href="#download">Download the Mac beta</a>.</p>
           </form>
 
           <div class="grille" aria-hidden="true"></div>
@@ -242,20 +250,37 @@
         <h2 id="download-title">Get loggdin.</h2>
         <div class="downloads">
           <div class="dl">
-            <h3>macOS</h3>
-            <p>The signed, notarized app is on its way. Join the waitlist and we'll email you the download.</p>
-            <a class="key key-signal" href="#top" data-focus-email>Join the waitlist</a>
+            <h3>macOS beta</h3>
+            <p>Version 1.2.1 for Apple silicon and Intel Macs, macOS 14 or later. It isn't notarized by Apple yet, so macOS asks you to confirm once. <a href="#mac-install">Here's how</a>.</p>
+            <div class="dl-actions">
+              <a class="key" href="https://github.com/nipungalhotra/AgentSentinel/releases/download/v1.2.1/loggdin-v1.2.1.dmg" download>Download beta (.dmg)</a>
+              <a class="key key-signal" href="#top" data-focus-email>Get the signed version</a>
+            </div>
           </div>
           <div class="dl">
             <h3>Windows and Linux</h3>
             <p>A small background service with an approval page in your browser. Needs Python 3.9 or later.</p>
-            <a class="key" href="https://github.com/nipungalhotra/AgentSentinel#option-3-windows--linux-portable-daemon">Install instructions</a>
+            <div class="dl-actions">
+              <a class="key" href="https://github.com/nipungalhotra/AgentSentinel/releases/download/v1.2.1/loggdin-portable-v1.2.1.zip" download>Download (.zip)</a>
+              <a class="link-quiet" href="https://github.com/nipungalhotra/AgentSentinel#option-3-windows--linux-portable-daemon">Install steps</a>
+            </div>
           </div>
           <div class="dl">
             <h3>From source</h3>
             <p>Read the code, build it yourself and follow releases on GitHub.</p>
             <a class="key" href="https://github.com/nipungalhotra/AgentSentinel">View on GitHub</a>
           </div>
+        </div>
+
+        <div class="install" id="mac-install">
+          <h3>Opening the Mac beta</h3>
+          <ol class="install-steps">
+            <li>Open the downloaded <code>loggdin-v1.2.1.dmg</code> and drag <strong>Loggdin</strong> into <strong>Applications</strong>.</li>
+            <li>Open Loggdin from Applications. macOS says it can't verify the app. Click <strong>Done</strong>.</li>
+            <li>Open <strong>System Settings → Privacy &amp; Security</strong>, scroll down to <em>Security</em>, and click <strong>Open Anyway</strong> next to Loggdin. Confirm with your password or Touch ID.</li>
+            <li>Loggdin starts in your menu bar. From now on it opens normally.</li>
+          </ol>
+          <p class="install-note">Agent hooks run on Python 3. If macOS offers to install its developer tools the first time an agent asks, click <strong>Install</strong>. You can check the download against its <a href="https://github.com/nipungalhotra/AgentSentinel/releases/tag/v1.2.1">SHA-256 checksum</a>.</p>
         </div>
       </div>
     </section>
@@ -268,7 +293,7 @@
           <details><summary>Is it really free?</summary><p>Yes. Everything in the app today is free during the beta. Paid Pro and Team plans may come later; the waitlist hears about them first, and nothing you use now will be taken away without notice.</p></details>
           <details><summary>Does my code or data leave my machine?</summary><p>No. Requests travel over 127.0.0.1 and a private Unix socket on your computer. The app has no account and no telemetry. The waitlist form on this site only collects your email address.</p></details>
           <details><summary>Which agents does it work with?</summary><p>Claude Code, Codex, Cursor, Claude Desktop, Antigravity, GitHub Copilot CLI and zsh. You can also gate your own agents with the Python or Node SDK, or through the MCP server.</p></details>
-          <details><summary>Why can't I download the Mac app yet?</summary><p>macOS blocks apps that aren't signed and notarized by Apple. The signed build is being prepared, and we'd rather wait than ask you to bypass Gatekeeper. You can still build it from source today.</p></details>
+          <details><summary>Why does macOS warn me when I open the beta?</summary><p>macOS checks that apps from the internet are notarized by Apple. The beta isn't yet, so macOS asks you to confirm once, in System Settings → Privacy &amp; Security → Open Anyway. The source code is public on GitHub, so you can see exactly what it does. A signed, notarized version is on its way. Join the waitlist to get it.</p></details>
           <details><summary>Will it slow my agents down?</summary><p>Only by the moment it takes you to decide. Everything else is handled locally in milliseconds, and the app uses about 0.1% CPU while idle.</p></details>
           <details><summary>What if loggdin isn't running?</summary><p>By default agents carry on, so you're never locked out of your own tools. To block everything until loggdin is back, set <code>LOGGDIN_FAIL_CLOSED=1</code>.</p></details>
           <details><summary>Is loggdin affiliated with Anthropic, OpenAI, Google, Cursor or GitHub?</summary><p>No. loggdin is an independent project. Product names appear only to say what it works with.</p></details>

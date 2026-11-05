@@ -324,7 +324,16 @@ code, kbd, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospac
 .dl:first-child { border-left: 0; }
 .dl h3 { font-size: 1.35rem; }
 .dl p { color: var(--ink); font-size: 0.97rem; max-width: 36ch; }
-.dl .key { justify-self: start; margin-top: 8px; }
+.dl .key { justify-self: start; }
+.dl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-top: 8px; }
+.link-quiet { color: var(--ink-2); font-size: 0.95rem; }
+.form-alt { margin-top: 6px; font-size: 0.9rem; color: var(--ink-2); }
+.install { margin-top: calc(var(--u) * 4); padding: calc(var(--u) * 4); background: var(--panel); border-radius: 12px; box-shadow: var(--recess); }
+.install h3 { font-size: 1.35rem; }
+.install-steps { margin: calc(var(--u) * 2) 0 0; padding-left: 1.4em; display: grid; gap: 10px; max-width: 70ch; }
+.install-steps li { padding-left: 4px; }
+.install-steps li::marker { font-weight: 680; color: var(--ink); }
+.install-note { margin-top: calc(var(--u) * 2); max-width: 70ch; color: var(--ink-2); font-size: 0.95rem; }
 
 /* faq */
 .faq-wrap { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: calc(var(--u) * 8); align-items: start; }

@@ -51,7 +51,7 @@ from urllib.parse import parse_qs, urlparse
 import urllib.request
 import urllib.error
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 DEFAULT_PORT = 9191
 PORT_RANGE = 10                      # 9191..9200 if the default is taken
 ASK_TIMEOUT = float(os.environ.get("LOGGDIN_TIMEOUT", "115"))  # agents allow 120s
