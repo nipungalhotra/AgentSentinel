@@ -45,6 +45,7 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 ### ⏱️ 2. Smart Scope Selection ("Allow once", "for 10 min", "Always allow")
 - **Allow Once (`Space` / Touch ID)**: Permits the single immediate action.
 - **Allow for 10 Min (`Tab` to toggle)**: Caches command approval for 10 minutes with auto-expiration, eliminating annoying repetitive prompts during active agent workflows.
+- **Allow 10 Min, All Folders ("10 min · all")**: An explicit opt-in for when you are working across several projects or tools at once. The approval covers every folder for 10 minutes. It is not offered for high-risk requests, and chained or unrelated commands still prompt. From the CLI: `loggdin allow 10m-all`.
 - **Always Allow**: Persists command rules to encrypted local storage (`~/.loggdin/rules.json`).
 - **Safety Boundary**: Catastrophic root commands (`rm -rf /`, `mkfs`) always require explicit verification and cannot be blindly whitelisted.
 
@@ -69,15 +70,42 @@ open dist/Loggdin.dmg
 
 ### Option 2: Build from Source
 ```bash
-git clone https://github.com/nipun/loggdin.git
-cd loggdin
+git clone https://github.com/nipungalhotra/AgentSentinel.git
+cd AgentSentinel
 swift build -c release
 cp .build/release/loggdin /Applications/Loggdin.app/Contents/MacOS/loggdin
 ```
 
----
+### Option 3: Windows & Linux (portable daemon)
+The notch app is macOS-only. On Windows and Linux, loggdin runs as a small background
+daemon (`bin/loggdin.py`, Python 3.9+ standard library only) that serves the same local API,
+so the hooks, MCP server and SDKs work unchanged. You approve requests on a local web page,
+or from the CLI, and get a desktop notification when an agent asks.
 
-## 🚀 1-Click Setup Across All AI Agents
+Download `loggdin-portable-v<version>.zip` from the release (or run `./packaging/create_portable.sh`), unzip it, then:
+
+```bash
+./install.sh                                            # Linux
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1    # Windows
+```
+
+The installer copies loggdin into your user profile, adds a `loggdin` command, starts it at login,
+and hooks every agent it finds (Claude Code, Codex, Antigravity, Cursor, Claude Desktop, Copilot).
+Use `--no-agents` / `-NoAgents` to skip that step, and `--uninstall` / `-Uninstall` to remove it.
+
+| | macOS app | Windows / Linux daemon |
+|---|---|---|
+| Approve requests | Notch popup, Touch ID | `loggdin ui` web page, `loggdin allow` / `deny` |
+| Notifications | Built in | Windows balloon, Linux `notify-send` |
+| Start at login | Login item | Startup folder / XDG autostart |
+| State folder | `~/Library/Application Support/AgentSentinel` | `%APPDATA%\Loggdin` / `~/.config/loggdin` |
+| Rules, 10-min grants, audit chain | Yes | Yes |
+
+Set `LOGGDIN_HOME` to use a different state folder. Node.js is only needed for the MCP integration.
+
+
 
 Configure all supported AI agents in one command:
 
@@ -239,6 +267,27 @@ loggdin includes an automated test suite across 6 test suites covering security,
 | **MCP Server Protocol** | `tests/test_mcp_server.py` | JSON-RPC 2.0 handshake (`initialize`, `tools/list`, and `tools/call`) |
 
 ---
+
+## 🚢 Releasing
+
+Pushing a tag such as `v1.2.1` runs `.github/workflows/release.yml`. It builds a Developer ID-signed,
+notarized and stapled DMG, plus the Windows/Linux portable zip, checks that Gatekeeper accepts the
+DMG, and publishes a GitHub release. It refuses to publish an unsigned build.
+
+One-time setup: add these repository secrets: `MACOS_CERTIFICATE` (base64 of your
+"Developer ID Application" .p12), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`,
+`APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` (an app-specific password).
+
+Per release: bump the version in `packaging/Info.plist`, `bin/loggdin.py` and the casks, push the tag,
+then copy the SHA-256 shown in the workflow summary into the casks' `sha256`.
+
+## 🌐 Website
+
+The marketing site lives in `website/`: plain HTML, CSS and JS with no build step and self-hosted fonts.
+
+- **Preview locally:** `python3 -m http.server 4173 --directory website`, then open http://localhost:4173
+- **Connect the waitlist:** sign up for a form backend that accepts a POST with an `email` field (for example Buttondown, Formspree or Tally), then set `data-endpoint="…"` on the `<form id="waitlist">` in `website/index.html`. Until then, the form politely points visitors to the GitHub repo instead of pretending to sign them up.
+- **Deploy:** in the repository's Settings → Pages, set Source to "GitHub Actions". Every push to `main` that changes `website/` then publishes the site via `.github/workflows/pages.yml`. Add a custom domain in the same screen.
 
 ## 🛡️ Production Error Handling & Logging
 

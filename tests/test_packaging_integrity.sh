@@ -23,6 +23,9 @@ bash -n bin/sentinel
 bash -n bin/loggdin
 bash -n packaging/create_dmg.sh
 python3 -m py_compile bin/sentinel-hook
+python3 -m py_compile bin/loggdin.py
+sh -n packaging/install.sh
+bash -n packaging/create_portable.sh
 echo "✓ All CLI scripts passed syntax checks."
 
 echo "3. Checking Node.js MCP server syntax..."
@@ -35,6 +38,13 @@ if grep -r "curl " Casks packaging/loggdin.rb 2>/dev/null; then
   exit 1
 fi
 echo "✓ Homebrew casks use safe, hermetic binary distribution."
+
+echo "4b. Checking hook keeps no state or logs in shared /tmp..."
+if grep -nE "open\(['\"]/tmp/|= *['\"]/tmp/sentinel" bin/sentinel-hook; then
+  echo "❌ FAILED: sentinel-hook writes to world-readable /tmp!"
+  exit 1
+fi
+echo "✓ sentinel-hook keeps logs and caches in per-user directories."
 
 echo "5. Verifying Info.plist exists..."
 if [[ ! -f "packaging/Info.plist" ]]; then

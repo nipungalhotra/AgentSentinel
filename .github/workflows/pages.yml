@@ -1,0 +1,45 @@
+name: Website (GitHub Pages)
+
+# Publishes the static site in website/ to GitHub Pages.
+# One-time setup: repository Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# Custom domain: add it in the same Settings → Pages screen (GitHub writes the CNAME for you).
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "website/**", ".github/workflows/pages.yml" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check links to local files
+        run: |
+          cd website
+          missing=0
+          for ref in $(grep -ohE '(href|src)="[^"#:]+"' *.html | sed -E 's/^(href|src)="//; s/"$//' | sort -u); do
+            [ -e "$ref" ] || { echo "::error::missing file referenced by the site: $ref"; missing=1; }
+          done
+          exit $missing
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+      - id: deployment
+        uses: actions/deploy-pages@v4

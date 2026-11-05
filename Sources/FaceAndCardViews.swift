@@ -144,8 +144,15 @@ struct FaceView: View {
         .shadow(color: state.color.opacity(0.4), radius: 8, y: 4)
         .animation(.spring(response: 0.35, dampingFraction: 0.7), value: state)
         .animation(.easeOut(duration: 0.12), value: look)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { zFloat = true }
+        // The "zZ" only shows when sleepy; run its repeat-forever float only then (it used to
+        // animate invisibly on every popup, costing CPU for the whole time a prompt was open).
+        .onChange(of: state == .sleepy, initial: true) { _, sleepy in
+            if sleepy {
+                withAnimation(.easeInOut(duration: 1).repeatForever(autoreverses: true)) { zFloat = true }
+            } else {
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { zFloat = false }
+            }
         }
         .task {
             while !Task.isCancelled {
@@ -438,7 +445,7 @@ final class PermissionModel {
 
     func stepScope(_ delta: Int) {
         guard isAsking else { return }
-        let all = AllowScope.allCases
+        let all = AllowScope.allCases.filter { !(isHigh && $0 == .tenMinutesAnywhere) }
         guard let i = all.firstIndex(of: scope) else { return }
         let next = min(max(i + delta, 0), all.count - 1)
         withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { scope = all[next] }
@@ -947,9 +954,11 @@ struct ScopePicker: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AllowScope.allCases) { scope in
+                let disabled = locked && scope == .tenMinutesAnywhere   // never all-folders for high risk
                 Text(scope.label)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(selection == scope ? Color.primary : Color.secondary)
+                    .opacity(disabled ? 0.35 : 1)
                     .frame(maxWidth: .infinity)
                     .frame(height: 30)
                     .background {
@@ -962,8 +971,10 @@ struct ScopePicker: View {
                     }
                     .contentShape(Capsule())
                     .onTapGesture {
+                        guard !disabled else { return }
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { selection = scope }
                     }
+                    .help(disabled ? "Not available for high-risk requests" : scope.allowLabel)
             }
         }
         .padding(3)
@@ -1200,10 +1211,17 @@ final class PermissionPopupController {
 
         // Prioritize the screen the user is actively working on (mouse cursor location)
         let mouseLoc = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouseLoc, $0.frame, false) }
+        // No attached display (e.g. closed-lid Mac with display asleep): indexing screens[0]
+        // would crash, so fall back to the "no decision" path instead.
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLoc, $0.frame, false) })
             ?? NSScreen.main
-            ?? NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
-            ?? NSScreen.screens[0]
+            ?? NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+            ?? NSScreen.screens.first else {
+            self.activeRequest = nil
+            self.activeModel = nil
+            completion(.timeout)
+            return
+        }
 
         let geometry = IslandScreenGeometry(screen: screen)
         SoundEngine.shared.playPopup()
@@ -1225,7 +1243,11 @@ final class PermissionPopupController {
             } else {
                 SoundEngine.shared.playDeny()
             }
+            // Tear the panel down completely: a merely hidden panel keeps its SwiftUI tree (and the
+            // face's repeat-forever animations) alive, so every answered prompt used to leak CPU.
             panel.orderOut(nil)
+            panel.contentView = nil
+            panel.close()
             self?.panel = nil
             self?.activeRequest = nil
             self?.activeModel = nil

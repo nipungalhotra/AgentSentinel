@@ -10,16 +10,69 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+function stateDir() {
+  // Per-OS loggdin state dir (matches bin/loggdin.py and the Mac app).
+  if (process.env.LOGGDIN_HOME) return process.env.LOGGDIN_HOME;
+  const home = os.homedir();
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'AgentSentinel');
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Loggdin');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'loggdin');
+}
+
+function readStateFile(name) {
+  const files = process.env.LOGGDIN_HOME ? [] : [path.join(os.homedir(), '.loggdin', name)];
+  files.push(path.join(stateDir(), name));
+  for (const f of files) {
+    try { if (fs.existsSync(f)) return fs.readFileSync(f, 'utf8').trim(); } catch {}
+  }
+  return '';
+}
+
+function verifyDaemon(port, token) {
+  // Resolves 'ok' when the server on `port` proves it knows `token` (HMAC challenge on /status),
+  // 'down' when nothing answers, 'mismatch' otherwise. The token is only sent after 'ok', so
+  // another local user squatting the port cannot collect it.
+  const crypto = require('crypto');
+  const challenge = crypto.randomBytes(16).toString('hex');
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: '127.0.0.1', port, path: `/status?challenge=${challenge}`, timeout: 2000 }, (res) => {
+      let d = '';
+      res.on('data', (c) => { d += c; });
+      res.on('end', () => {
+        try {
+          const proof = String(JSON.parse(d).proof || '');
+          const expected = crypto.createHmac('sha256', token).update('loggdin-status:' + challenge).digest('hex');
+          const a = Buffer.from(proof), b = Buffer.from(expected);
+          resolve(a.length === b.length && crypto.timingSafeEqual(a, b) ? 'ok' : 'mismatch');
+        } catch { resolve('mismatch'); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve('down'); });
+    req.on('error', () => resolve('down'));
+  });
+}
+
+function launchDaemon() {
+  // Start loggdin if it is not running: Loggdin.app on macOS, loggdin.py elsewhere.
+  const { spawn } = require('child_process');
+  try {
+    if (process.platform === 'darwin' && fs.existsSync('/Applications/Loggdin.app')) {
+      spawn('open', ['-g', '-j', '/Applications/Loggdin.app'], { detached: true, stdio: 'ignore' }).unref();
+      return;
+    }
+    const script = path.join(stateDir(), 'loggdin.py');
+    if (fs.existsSync(script)) {
+      const py = process.platform === 'win32' ? 'pythonw' : 'python3';
+      spawn(py, [script, 'daemon'], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    }
+  } catch {}
+}
+
 function getSentinelPort() {
   if (process.env.LOGGDIN_PORT) return parseInt(process.env.LOGGDIN_PORT, 10);
   if (process.env.SENTINEL_PORT) return parseInt(process.env.SENTINEL_PORT, 10);
-  try {
-    const p1 = path.join(os.homedir(), '.loggdin', 'port');
-    if (fs.existsSync(p1)) return parseInt(fs.readFileSync(p1, 'utf8').trim(), 10);
-    const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'port');
-    if (fs.existsSync(p2)) return parseInt(fs.readFileSync(p2, 'utf8').trim(), 10);
-  } catch {}
-  return 9191;
+  const v = parseInt(readStateFile('port'), 10);
+  return Number.isFinite(v) && v > 0 ? v : 9191;
 }
 
 function askPermission({
@@ -48,16 +101,8 @@ function askPermission({
       forcePrompt
     });
 
-    const fs = require('fs');
-    const path = require('path');
-    const os = require('os');
-    let token = '';
-    try {
-      const p1 = path.join(os.homedir(), '.loggdin', 'token');
-      const p2 = path.join(os.homedir(), 'Library', 'Application Support', 'AgentSentinel', 'token');
-      if (fs.existsSync(p1)) token = fs.readFileSync(p1, 'utf8').trim();
-      else if (fs.existsSync(p2)) token = fs.readFileSync(p2, 'utf8').trim();
-    } catch {}
+    const token = readStateFile('token');
+    const send = () => {
 
     const headers = {
       'Content-Type': 'application/json',
@@ -88,6 +133,9 @@ function askPermission({
     req.on('error', () => resolve(false));
     req.write(postData);
     req.end();
+    };
+    if (!token) return send();
+    verifyDaemon(getSentinelPort(), token).then((state) => (state === 'ok' ? send() : resolve(false)));
   });
 }
 

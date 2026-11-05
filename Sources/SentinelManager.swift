@@ -270,6 +270,14 @@ final class SentinelManager: NSObject {
         window.contentView = NSHostingView(rootView: DashboardView())
         window.isReleasedWhenClosed = false
         self.dashboardWindow = window
+        // When closed, release the SwiftUI tree so its animations (radar pulse, etc.) stop
+        // instead of rendering in an invisible window; it is rebuilt on the next open.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                window?.contentView = nil
+                self?.dashboardWindow = nil
+            }
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -11,6 +11,15 @@ while [ -L "$SCRIPT_PATH" ]; do
   [[ $SCRIPT_PATH != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
 BIN_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+# Windows/Linux: the native app is macOS-only, so use the cross-platform daemon + CLI.
+if [ "$(uname -s)" != "Darwin" ] || [ -n "${LOGGDIN_PORTABLE:-}" ]; then
+  for py in "$BIN_DIR/loggdin.py" "${XDG_CONFIG_HOME:-$HOME/.config}/loggdin/loggdin.py"; do
+    [ -f "$py" ] && exec python3 "$py" "$@"
+  done
+  echo "loggdin: loggdin.py not found next to $BIN_DIR" >&2
+  exit 1
+fi
 ROOT_DIR="$(cd -P "$BIN_DIR/.." && pwd)"
 
 APP_PATH="/Applications/Loggdin.app"
@@ -204,7 +213,7 @@ cmd_test() {
 
 cmd_pending() {
   ensure_daemon
-  PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  PENDING=$(curl -s -H "X-Loggdin-Token: $(get_token)" "http://127.0.0.1:$PORT/pending")
   if [ "${1:-}" = "--json" ] || [ "${1:-}" = "-j" ]; then
     echo "$PENDING"
     return
@@ -227,7 +236,7 @@ except Exception as e:
 
 cmd_review() {
   ensure_daemon
-  PENDING=$(curl -s "http://127.0.0.1:$PORT/pending")
+  PENDING=$(curl -s -H "X-Loggdin-Token: $(get_token)" "http://127.0.0.1:$PORT/pending")
   python3 -c "
 import sys, json, os, subprocess
 
@@ -289,10 +298,26 @@ except Exception as e:
 " "$PENDING"
 }
 
+# Print the success message only if the daemon actually resolved a pending request.
+report_decision() {
+  local resp="$1" ok_msg="$2"
+  if [ -z "$resp" ]; then
+    echo "⚠️  No response from loggdin daemon." >&2
+    return 1
+  fi
+  if echo "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
+    echo "$ok_msg"
+  else
+    echo "ℹ️  No permission request is pending — nothing was changed."
+    return 1
+  fi
+}
+
 cmd_allow() {
   ensure_daemon
   SCOPE="${1:-once}"
   case "$SCOPE" in
+    10m-all|10m_all|anywhere|all) SCOPE="10m-all" ;;
     10m|10min|10minutes) SCOPE="10m" ;;
     always|all) SCOPE="always" ;;
     *) SCOPE="once" ;;
@@ -301,7 +326,7 @@ cmd_allow() {
     -H "Content-Type: application/json" \
     -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"decision\":\"allow\",\"scope\":\"$SCOPE\"}")
-  echo "✓ Approved permission (Scope: $SCOPE)"
+  report_decision "$RESP" "✓ Approved permission (Scope: $SCOPE)"
 }
 
 cmd_deny() {
@@ -310,7 +335,7 @@ cmd_deny() {
     -H "Content-Type: application/json" \
     -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"decision\":\"deny\"}")
-  echo "❌ Denied permission."
+  report_decision "$RESP" "❌ Denied permission."
 }
 
 cmd_sound() {
@@ -362,14 +387,32 @@ case "$1" in
     shift
     cmd_test "$@"
     ;;
-  install)
-    "$ROOT_DIR/bin/sentinel" install "$2"
+  install|uninstall)
+    # Agent integrations are written by loggdin.py (shared with Windows/Linux and tested).
+    # Note: bin/sentinel is often a symlink/copy of THIS script, so never delegate to it blindly.
+    TARGET="${2:-detected}"
+    if [ "$TARGET" = "zsh" ]; then
+      for c in "$BIN_DIR/sentinel-installer" "$APP_PATH/Contents/Resources/bin/sentinel-installer" "$ROOT_DIR/bin/sentinel"; do
+        if [ -f "$c" ] && ! grep -q "loggdin Universal CLI" "$c" 2>/dev/null; then
+          exec "$c" "$1" zsh
+        fi
+      done
+      echo "loggdin: zsh integration installer not found" >&2
+      exit 1
+    fi
+    for c in "$BIN_DIR/loggdin.py" "$APP_PATH/Contents/Resources/bin/loggdin.py" "$ROOT_DIR/bin/loggdin.py"; do
+      if [ -f "$c" ]; then
+        exec python3 "$c" "$1" "$TARGET"
+      fi
+    done
+    echo "loggdin: installer (loggdin.py) not found next to $BIN_DIR or in $APP_PATH" >&2
+    exit 1
     ;;
   help|--help|-h|"")
     echo "loggdin Universal CLI (Apple Shortcuts & Agent Guard)"
     echo ""
     echo "Usage:"
-    echo "  loggdin allow [once|10m|always]  Approves active permission request (ideal for Apple Shortcuts)"
+    echo "  loggdin allow [once|10m|10m-all|always]  Approves the active request (10m-all: 10 minutes in every folder)"
     echo "  loggdin deny                     Denies active permission request"
     echo "  loggdin pending                  Shows currently pending permission prompt"
     echo "  loggdin sound [Glass|Ping|Pop]   Gets or sets the notification sound"
@@ -377,7 +420,8 @@ case "$1" in
     echo "  loggdin test <agent>             Tests live notch popup (antigravity, claude, codex, cursor, cowork)"
     echo "  loggdin mcp                      Runs the MCP server for Claude, Cowork, Cursor, Antigravity"
     echo "  loggdin status                   Displays daemon status"
-    echo "  loggdin install <target>         Installs integration (antigravity, claude, cursor, codex, zsh, all)"
+    echo "  loggdin install <target>         Installs integration (claude, codex, antigravity, cursor, cowork, copilot, zsh, all; default: detected)"
+    echo "  loggdin uninstall <target>       Removes an integration"
     ;;
   *)
     cmd_run "$@"

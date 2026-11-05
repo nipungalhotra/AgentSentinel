@@ -25,6 +25,7 @@ class MockSentinelServer(http.server.HTTPServer):
         self.last_request_headers = {}
         self.last_payload = {}
         self.response_allowed = True
+        self.token = None          # when set, /status answers the identity challenge
 
 class MockHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
@@ -44,6 +45,11 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         resp = {"status": "running", "port": self.server.server_port, "socket": "/tmp/test.sock"}
+        if self.server.token and "challenge=" in self.path:
+            import hmac, hashlib
+            challenge = self.path.split("challenge=", 1)[1]
+            resp["proof"] = hmac.new(self.server.token.encode(), ("loggdin-status:" + challenge).encode(),
+                                     hashlib.sha256).hexdigest()
         self.wfile.write(json.dumps(resp).encode('utf-8'))
 
     def log_message(self, format, *args):
@@ -66,6 +72,10 @@ class TestPythonSDK(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.original_env = os.environ.copy()
+        # Hermetic: never read the developer's real loggdin token/port.
+        os.environ["LOGGDIN_HOME"] = self.temp_dir
+        self.server.token = None
+        self.server.last_request_headers = {}
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -94,19 +104,13 @@ class TestPythonSDK(unittest.TestCase):
         with open(port_file, "w") as f:
             f.write(f"{self.port}\n")
 
-        # Mock the path in os.path.expanduser
-        original_expanduser = os.path.expanduser
-        try:
-            os.path.expanduser = lambda path: port_file if "port" in path else original_expanduser(path)
-            os.environ.pop("LOGGDIN_PORT", None)
-            os.environ.pop("SENTINEL_PORT", None)
-            os.environ.pop("SENTINEL_URL", None)
-            os.environ.pop("LOGGDIN_URL", None)
+        # Port discovery reads <state dir>/port; LOGGDIN_HOME points the state dir at our temp dir.
+        os.environ["LOGGDIN_HOME"] = self.temp_dir
+        for k in ("LOGGDIN_PORT", "SENTINEL_PORT", "SENTINEL_URL", "LOGGDIN_URL"):
+            os.environ.pop(k, None)
 
-            url = sentinel.get_sentinel_url("ask")
-            self.assertEqual(url, f"http://127.0.0.1:{self.port}/ask")
-        finally:
-            os.path.expanduser = original_expanduser
+        url = sentinel.get_sentinel_url("ask")
+        self.assertEqual(url, f"http://127.0.0.1:{self.port}/ask")
 
     def test_ask_permission_approved(self):
         os.environ["SENTINEL_URL"] = f"http://127.0.0.1:{self.port}/ask"
@@ -164,6 +168,28 @@ class TestPythonSDK(unittest.TestCase):
         with self.assertRaises(PermissionError) as ctx:
             sentinel.guard("echo 'should not run'", requested_by="Tester")
         self.assertIn("Permission denied", str(ctx.exception))
+
+    def _write_token(self, value):
+        with open(os.path.join(self.temp_dir, "token"), "w") as f:
+            f.write(value)
+
+    def test_token_sent_only_to_verified_daemon(self):
+        os.environ["SENTINEL_URL"] = f"http://127.0.0.1:{self.port}/ask"
+        os.environ["LOGGDIN_URL"] = f"http://127.0.0.1:{self.port}/ask"
+        self.server.response_allowed = True
+        self._write_token("a" * 64)
+
+        # Server cannot prove it knows the token (e.g. another user squatting the port).
+        self.assertFalse(sentinel.ask_permission(command="npm test"))
+        self.assertFalse(loggdin.ask_permission(command="npm test"))
+        self.assertEqual(self.server.last_request_headers, {}, "token must not be sent")
+
+        # Real daemon: proves the token, then receives it.
+        self.server.token = "a" * 64
+        self.assertTrue(sentinel.ask_permission(command="npm test"))
+        self.assertEqual(self.server.last_request_headers.get("X-Loggdin-Token"), "a" * 64)
+        self.assertTrue(loggdin.ask_permission(command="npm test"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

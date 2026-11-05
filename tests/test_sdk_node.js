@@ -8,13 +8,21 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const crypto = require('crypto');
+
+// Hermetic: never read the developer's real loggdin token/port.
+const STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'lg-node-'));
+process.env.LOGGDIN_HOME = STATE;
+
 const { askPermission, guard, getSentinelPort, isDaemonRunning, getDaemonStatus } = require('../sdk/sentinel');
 
 async function runTests() {
   console.log('Running Node.js SDK Tests...\n');
 
   let lastPayload = null;
+  let lastHeaders = {};
   let responseAllowed = true;
+  let serverToken = null;   // when set, /status answers the identity challenge
 
   // Start mock HTTP server on ephemeral port
   const server = http.createServer((req, res) => {
@@ -22,10 +30,16 @@ async function runTests() {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       if (req.method === 'GET') {
+        const status = { status: 'running', port: testPort };
+        const m = /challenge=([0-9a-f]+)/.exec(req.url);
+        if (serverToken && m) {
+          status.proof = crypto.createHmac('sha256', serverToken).update('loggdin-status:' + m[1]).digest('hex');
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'running', port: testPort }));
+        res.end(JSON.stringify(status));
         return;
       }
+      lastHeaders = req.headers;
       if (body) {
         lastPayload = JSON.parse(body);
       }
@@ -73,7 +87,7 @@ async function runTests() {
 
     // 4. Guard Approved Execution
     responseAllowed = true;
-    const proc = await guard("node -e 'console.log(\"node-sdk-ok\")'", { requestedBy: 'Tester' });
+    const proc = await guard(`node -e "console.log('node-sdk-ok')"`, { requestedBy: 'Tester' }); // quoting valid in sh and cmd.exe
     assert.ok(proc.stdout.includes('node-sdk-ok'), 'guard stdout should include output');
     console.log('✓ test_guard_execution_success passed');
 
@@ -94,6 +108,19 @@ async function runTests() {
     const arrayProc = await guard(['node', '-e', 'console.log("node-array-exec-ok")'], { requestedBy: 'Tester' });
     assert.ok(arrayProc.stdout.includes('node-array-exec-ok'), 'array command should execute with execFile');
     console.log('✓ test_guard_execution_array_args passed');
+
+    // 6b. Token only goes to a daemon that proves it knows it (port-squatting guard)
+    fs.writeFileSync(path.join(STATE, 'token'), 'b'.repeat(64));
+    responseAllowed = true;
+    lastHeaders = {};
+    assert.strictEqual(await askPermission({ command: 'npm test' }), false, 'unverified daemon must be refused');
+    assert.strictEqual(lastHeaders['x-loggdin-token'], undefined, 'token must not be sent to unverified daemon');
+    serverToken = 'b'.repeat(64);
+    assert.strictEqual(await askPermission({ command: 'npm test' }), true, 'verified daemon gets the request');
+    assert.strictEqual(lastHeaders['x-loggdin-token'], 'b'.repeat(64));
+    fs.unlinkSync(path.join(STATE, 'token'));
+    serverToken = null;
+    console.log('✓ test_token_only_to_verified_daemon passed');
 
     // 7. Daemon Status & Health Check
     process.env.LOGGDIN_PORT = testPort.toString();

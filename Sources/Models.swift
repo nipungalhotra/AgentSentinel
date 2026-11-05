@@ -27,7 +27,17 @@ enum Risk: String, Codable, CaseIterable {
 // MARK: - Scopes
 
 enum AllowScope: String, Codable, CaseIterable, Identifiable {
-    case once, tenMinutes, always
+    /// Parses the scope names used by the CLI, URL scheme, HTTP API and Shortcuts.
+    static func parse(_ raw: String?) -> AllowScope {
+        switch (raw ?? "").lowercased() {
+        case "10m", "tenminutes", "10_minutes", "10min": return .tenMinutes
+        case "10m-all", "10m_all", "tenminutesanywhere", "anywhere", "all": return .tenMinutesAnywhere
+        case "always": return .always
+        default: return .once
+        }
+    }
+
+    case once, tenMinutes, tenMinutesAnywhere, always
 
     var id: String { rawValue }
 
@@ -35,6 +45,7 @@ enum AllowScope: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .once: return "Once"
         case .tenMinutes: return "10 min"
+        case .tenMinutesAnywhere: return "10 min · all"
         case .always: return "Always"
         }
     }
@@ -43,6 +54,7 @@ enum AllowScope: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .once: return "Allow once"
         case .tenMinutes: return "Allow 10 min"
+        case .tenMinutesAnywhere: return "Allow 10 min, all folders"
         case .always: return "Always allow"
         }
     }
@@ -51,6 +63,7 @@ enum AllowScope: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .once: return "Just this once"
         case .tenMinutes: return "For the next 10 minutes"
+        case .tenMinutesAnywhere: return "For 10 minutes, in every folder"
         case .always: return "Saved to your rules"
         }
     }

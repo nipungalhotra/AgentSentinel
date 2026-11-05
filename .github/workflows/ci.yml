@@ -14,16 +14,29 @@ concurrency:
 jobs:
   build-and-test:
     name: Build, Test & Package on macOS
-    runs-on: macos-14
+    # Needs the macOS 26+ SDK (Liquid Glass APIs, SwiftUI main-actor isolation).
+    # The app itself still deploys to macOS 14 via #available guards.
+    runs-on: macos-15
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Swift
-        uses: swift-actions/setup-swift@v2
+      - name: Select Xcode (macOS 26+ SDK)
+        uses: maxim-lobanov/setup-xcode@v1
         with:
-          swift-version: "6.0"
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          SDK=$(xcrun --show-sdk-version)
+          echo "macOS SDK: $SDK"
+          if [ "${SDK%%.*}" -lt 26 ]; then
+            echo "::error::macOS SDK $SDK is too old; Loggdin needs the macOS 26+ SDK"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,8 +64,13 @@ jobs:
 
       - name: Verify DMG Output Artifact
         run: |
-          ls -la dist/Loggdin.dmg
+          ls -la dist/
           test -f dist/Loggdin.dmg
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' packaging/Info.plist)
+          test -f "dist/loggdin-v${VERSION}.dmg"
+          lipo -archs dist/Loggdin.app/Contents/MacOS/loggdin | grep -q x86_64
+          lipo -archs dist/Loggdin.app/Contents/MacOS/loggdin | grep -q arm64
+          codesign --verify --strict --verbose=2 dist/Loggdin.app
 
       - name: Upload Release Artifact (DMG)
         uses: actions/upload-artifact@v4
@@ -62,3 +80,97 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+
+  portable:
+    name: Portable daemon (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.13"
+    env:
+      LOGGDIN_NO_NOTIFY: "1"
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cross-platform daemon, hook & CLI
+        run: python tests/test_crossplatform_daemon.py
+
+      - name: SDK, MCP and rules tests
+        run: |
+          python tests/test_sdk_python.py
+          python tests/test_components_robustness.py
+          python tests/test_rules_engine_logic.py
+          python tests/test_mcp_server.py
+          node tests/test_sdk_node.js
+
+      - name: Installer smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sh -n packaging/install.sh
+          sh packaging/install.sh --no-agents
+          ~/.local/bin/loggdin status
+          ~/.local/bin/loggdin doctor
+          test -f ~/.config/autostart/loggdin.desktop
+          sh packaging/install.sh --uninstall
+          test ! -e ~/.local/bin/loggdin
+
+      - name: Installer smoke test (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell   # the default shell on end-user machines, not pwsh 7
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\install.ps1 -NoAgents
+          if ($LASTEXITCODE -ne 0) { throw 'install.ps1 failed' }
+          $cli = Join-Path $env:LOCALAPPDATA 'Loggdin\bin\loggdin.cmd'
+          & $cli status
+          if ($LASTEXITCODE -ne 0) { throw 'daemon not running after install' }
+          & $cli doctor
+          $run = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name loggdin -ErrorAction SilentlyContinue
+          if (-not $run) { throw 'autostart entry missing' }
+          if ($run.loggdin -notmatch 'pyw') { throw "autostart should run windowless (pyw/pythonw): $($run.loggdin)" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\install.ps1 -Uninstall
+          if (Test-Path $cli) { throw 'CLI shim not removed' }
+          if (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name loggdin -ErrorAction SilentlyContinue) { throw 'autostart not removed' }
+
+      - name: End-user scenario (Linux, from the portable zip)
+        if: runner.os == 'Linux'
+        run: |
+          ./packaging/create_portable.sh
+          LOGGDIN_ZIP="$(ls $PWD/dist/loggdin-portable-v*.zip | head -1)" sh tests/linux_scenario.sh
+
+      - name: End-user scenario (Windows, cmd.exe + Git Bash)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows_scenario.ps1
+
+      - name: Build portable package
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        run: ./packaging/create_portable.sh
+
+      - name: Upload portable package
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: loggdin-portable
+          path: dist/loggdin-portable-*.zip*
+          if-no-files-found: error

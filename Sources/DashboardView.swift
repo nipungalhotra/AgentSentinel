@@ -368,15 +368,15 @@ struct DashboardView: View {
 
 struct PulsingRadarBeacon: View {
     var isGuarding: Bool
-    @UIState private var pulse = false
 
     var body: some View {
         ZStack {
             if isGuarding {
-                Circle()
-                    .stroke(Color.green.opacity(0.6), lineWidth: 1.5)
-                    .frame(width: pulse ? 22 : 8, height: pulse ? 22 : 8)
-                    .opacity(pulse ? 0 : 0.8)
+                // The expanding ring runs as a Core Animation layer (render server), not a SwiftUI
+                // repeat-forever frame animation, which re-laid-out the dashboard every frame (~20% CPU).
+                PulseRingLayer(color: NSColor.systemGreen.withAlphaComponent(0.6))
+                    .frame(width: 24, height: 24)
+                    .allowsHitTesting(false)
 
                 Circle()
                     .fill(Color.green)
@@ -389,12 +389,43 @@ struct PulsingRadarBeacon: View {
             }
         }
         .frame(width: 24, height: 24)
-        .onAppear {
-            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) {
-                pulse = true
-            }
-        }
     }
+}
+
+/// A ring that grows from 8pt to 22pt while fading out, repeating every 1.6s, driven by Core Animation.
+struct PulseRingLayer: NSViewRepresentable {
+    var color: NSColor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        view.wantsLayer = true
+        let ring = CAShapeLayer()
+        ring.frame = CGRect(x: 1, y: 1, width: 22, height: 22)
+        ring.path = CGPath(ellipseIn: CGRect(x: 0.75, y: 0.75, width: 20.5, height: 20.5), transform: nil)
+        ring.fillColor = nil
+        ring.strokeColor = color.cgColor
+        ring.lineWidth = 1.5
+        ring.opacity = 0
+
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 8.0 / 22.0
+        scale.toValue = 1.0
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.8
+        fade.toValue = 0.0
+        let group = CAAnimationGroup()
+        group.animations = [scale, fade]
+        group.duration = 1.6
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        group.repeatCount = .infinity
+        group.isRemovedOnCompletion = false
+        ring.add(group, forKey: "pulse")
+
+        view.layer?.addSublayer(ring)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 // MARK: - Overview Tab
@@ -406,227 +437,238 @@ struct OverviewTab: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                // Hero Status Banner
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ZStack {
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color.blue.opacity(0.25), Color.purple.opacity(0.2)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .frame(width: 52, height: 52)
-                                .overlay(Circle().strokeBorder(Color.blue.opacity(0.35), lineWidth: 1))
-
-                            Image(systemName: "shield.fill")
-                                .font(.system(size: 24))
-                                .foregroundStyle(
-                                    LinearGradient(colors: [.blue, .cyan], startPoint: .top, endPoint: .bottom)
-                                )
-                                .shadow(color: Color.blue.opacity(0.5), radius: 6)
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 8) {
-                                Text("Zero-Trust Agent Defense Active")
-                                    .font(.system(size: 17, weight: .bold))
-                                HStack(spacing: 4) {
-                                    Circle().fill(Color.green).frame(width: 6, height: 6)
-                                    Text("ENFORCING")
-                                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.green)
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.green.opacity(0.12), in: Capsule())
-                            }
-
-                            Text("Guarding terminal commands, tool invocations, and MCP actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-
-                            // Hardware & Security Capability Badges
-                            HStack(spacing: 8) {
-                                let hasNotch = (NSScreen.screens.first { $0.safeAreaInsets.top > 0 }) != nil
-                                HStack(spacing: 4) {
-                                    Image(systemName: hasNotch ? "laptopcomputer" : "display")
-                                        .font(.system(size: 9))
-                                    Text(hasNotch ? "MacBook Notch Mode" : "Universal Island Mode")
-                                        .font(.system(size: 9.5, weight: .bold))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.blue.opacity(0.12), in: Capsule())
-                                .foregroundStyle(.blue)
-
-                                HStack(spacing: 4) {
-                                    Image(systemName: "touchid")
-                                        .font(.system(size: 9))
-                                    Text(BiometricAuthManager.shared.biometricName + " Ready")
-                                        .font(.system(size: 9.5, weight: .bold))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.orange.opacity(0.12), in: Capsule())
-                                .foregroundStyle(.orange)
-                            }
-                            .padding(.top, 2)
-                        }
-
-                        Spacer()
-
-                        Toggle("Guarding", isOn: $manager.isProtectionEnabled)
-                            .toggleStyle(.switch)
-                    }
-
-                    // Real-Time Event Readout Box
-                    HStack(spacing: 10) {
-                        Image(systemName: "terminal")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Text(manager.lastDecisionSummary)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8))
-                }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [.white.opacity(0.35), .white.opacity(0.1), .clear],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                )
-                .shadow(color: .black.opacity(0.08), radius: 12, y: 6)
-
-                // Bento Metric Cards Grid
-                HStack(spacing: 14) {
-                    metricBento(
-                        title: "Audit Events",
-                        count: "\(rules.auditLogs.count)",
-                        sub: "Real-time logged",
-                        icon: "list.bullet.rectangle.portrait.fill",
-                        color: Color.purple
-                    )
-                    metricBento(
-                        title: "Active Grants",
-                        count: "\(rules.activeGrants.count)",
-                        sub: "10-min passes",
-                        icon: "clock.badge.checkmark.fill",
-                        color: Color.orange
-                    )
-                    metricBento(
-                        title: "Saved Rules",
-                        count: "\(rules.storedRules.count)",
-                        sub: "Permanent whitelist",
-                        icon: "checkmark.shield.fill",
-                        color: Color.green
-                    )
-                    metricBento(
-                        title: "Pending Requests",
-                        count: "\(manager.pendingCount)",
-                        sub: manager.pendingCount > 0 ? "Awaiting decision" : "Queue clear",
-                        icon: "bell.badge.fill",
-                        color: manager.pendingCount > 0 ? Color.red : Color.blue
-                    )
-                }
-
-                // Interactive Simulator Section
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text("Liquid Glass Notch Simulator")
-                                .font(.system(size: 16, weight: .bold))
-                            Spacer()
-                            Text("6 Scenarios Ready")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                        Text("Trigger fluid permission cards directly beneath your MacBook camera notch to test the prompt experience:")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    VStack(spacing: 10) {
-                        ForEach(PermissionRequest.samples) { sample in
-                            let pill = PillCatalog.definition(for: sample.requestedBy)
-                            HStack(spacing: 14) {
-                                // Agent Pill Icon
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(pill.color.opacity(0.18))
-                                        .frame(width: 32, height: 32)
-                                    Image(systemName: sample.symbol)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(pill.color)
-                                }
-
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 8) {
-                                        Text(sample.title)
-                                            .font(.system(size: 13, weight: .semibold))
-                                        Text(sample.requestedBy)
-                                            .font(.system(size: 10.5, weight: .bold))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 1)
-                                            .background(pill.color.opacity(0.15), in: Capsule())
-                                            .foregroundStyle(pill.color)
-                                    }
-                                    Text(sample.plainCommand)
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-
-                                Spacer()
-
-                                RiskChip(risk: sample.risk)
-
-                                Button {
-                                    Task {
-                                        _ = await manager.evaluateOrAsk(sample, forcePrompt: true)
-                                    }
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: "play.fill")
-                                            .font(.system(size: 9))
-                                        Text("Trigger")
-                                            .font(.system(size: 12, weight: .semibold))
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(Color.blue, in: Capsule())
-                                    .foregroundStyle(.white)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(12)
-                            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
-                        }
-                    }
-                }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
+                heroBanner
+                metricsRow
+                simulatorSection
             }
             .padding(24)
         }
+    }
+
+    // Split into separate properties so the Swift type checker handles each part on its own.
+    // Hero Status Banner
+    private var heroBanner: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.blue.opacity(0.25), Color.purple.opacity(0.2)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 52, height: 52)
+                        .overlay(Circle().strokeBorder(Color.blue.opacity(0.35), lineWidth: 1))
+
+                    Image(systemName: "shield.fill")
+                        .font(.system(size: 24))
+                        .foregroundStyle(
+                            LinearGradient(colors: [.blue, .cyan], startPoint: .top, endPoint: .bottom)
+                        )
+                        .shadow(color: Color.blue.opacity(0.5), radius: 6)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("Zero-Trust Agent Defense Active")
+                            .font(.system(size: 17, weight: .bold))
+                        HStack(spacing: 4) {
+                            Circle().fill(Color.green).frame(width: 6, height: 6)
+                            Text("ENFORCING")
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.green)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.12), in: Capsule())
+                    }
+
+                    Text("Guarding terminal commands, tool invocations, and MCP actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    // Hardware & Security Capability Badges
+                    HStack(spacing: 8) {
+                        let hasNotch = (NSScreen.screens.first { $0.safeAreaInsets.top > 0 }) != nil
+                        HStack(spacing: 4) {
+                            Image(systemName: hasNotch ? "laptopcomputer" : "display")
+                                .font(.system(size: 9))
+                            Text(hasNotch ? "MacBook Notch Mode" : "Universal Island Mode")
+                                .font(.system(size: 9.5, weight: .bold))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.blue)
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "touchid")
+                                .font(.system(size: 9))
+                            Text(BiometricAuthManager.shared.biometricName + " Ready")
+                                .font(.system(size: 9.5, weight: .bold))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.orange)
+                    }
+                    .padding(.top, 2)
+                }
+
+                Spacer()
+
+                Toggle("Guarding", isOn: $manager.isProtectionEnabled)
+                    .toggleStyle(.switch)
+            }
+
+            // Real-Time Event Readout Box
+            HStack(spacing: 10) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(manager.lastDecisionSummary)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 0.8))
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.35), .white.opacity(0.1), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: .black.opacity(0.08), radius: 12, y: 6)
+    }
+
+    // Bento Metric Cards Grid
+    private var metricsRow: some View {
+        HStack(spacing: 14) {
+            metricBento(
+                title: "Audit Events",
+                count: "\(rules.auditLogs.count)",
+                sub: "Real-time logged",
+                icon: "list.bullet.rectangle.portrait.fill",
+                color: Color.purple
+            )
+            metricBento(
+                title: "Active Grants",
+                count: "\(rules.activeGrants.count)",
+                sub: "10-min passes",
+                icon: "clock.badge.checkmark.fill",
+                color: Color.orange
+            )
+            metricBento(
+                title: "Saved Rules",
+                count: "\(rules.storedRules.count)",
+                sub: "Permanent whitelist",
+                icon: "checkmark.shield.fill",
+                color: Color.green
+            )
+            metricBento(
+                title: "Pending Requests",
+                count: "\(manager.pendingCount)",
+                sub: manager.pendingCount > 0 ? "Awaiting decision" : "Queue clear",
+                icon: "bell.badge.fill",
+                color: manager.pendingCount > 0 ? Color.red : Color.blue
+            )
+        }
+    }
+
+    // Interactive Simulator Section
+    private var simulatorSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text("Liquid Glass Notch Simulator")
+                        .font(.system(size: 16, weight: .bold))
+                    Spacer()
+                    Text("6 Scenarios Ready")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Text("Trigger fluid permission cards directly beneath your MacBook camera notch to test the prompt experience:")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 10) {
+                ForEach(PermissionRequest.samples) { sample in
+                    let pill = PillCatalog.definition(for: sample.requestedBy)
+                    HStack(spacing: 14) {
+                        // Agent Pill Icon
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(pill.color.opacity(0.18))
+                                .frame(width: 32, height: 32)
+                            Image(systemName: sample.symbol)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(pill.color)
+                        }
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Text(sample.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text(sample.requestedBy)
+                                    .font(.system(size: 10.5, weight: .bold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(pill.color.opacity(0.15), in: Capsule())
+                                    .foregroundStyle(pill.color)
+                            }
+                            Text(sample.plainCommand)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+
+                        RiskChip(risk: sample.risk)
+
+                        Button {
+                            Task {
+                                _ = await manager.evaluateOrAsk(sample, forcePrompt: true)
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 9))
+                                Text("Trigger")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue, in: Capsule())
+                            .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(12)
+                    .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
+                }
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
     }
 
     private func metricBento(title: String, count: String, sub: String, icon: String, color: Color) -> some View {
@@ -736,301 +778,321 @@ add-zsh-hook preexec sentinel_preexec
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                // Header Banner
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Universal AI Agent Hub & Integrations")
-                                .font(.system(size: 18, weight: .bold))
-                            Text("Powered by loggdin: seamlessly intercepts actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
-                                .font(.system(size: 12.5))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-
-                        Button {
-                            _ = HookInstaller.shared.installAll()
-                            checkStatus()
-                            SoundEngine.shared.playAllow()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: allInstalled ? "checkmark.circle.fill" : "bolt.shield.fill")
-                                Text(allInstalled ? "All Agents Guarded" : "1-Click Setup All")
-                                    .fontWeight(.semibold)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(allInstalled ? Color.green : Color.blue, in: Capsule())
-                            .foregroundStyle(.white)
-                            .shadow(color: (allInstalled ? Color.green : Color.blue).opacity(0.4), radius: 8, y: 3)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
-
-                // 8 Core Agent Integration Bento Grid
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
-                    // 1. Claude Code
-                    let pClaude = PillCatalog.definition(for: "claude-code")
-                    agentCard(
-                        pill: pClaude,
-                        details: "Native hook in ~/.claude/settings.json (PermissionRequest, PreToolUse, AskUserQuestion)",
-                        isInstalled: claudeInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installClaudeCodeHooks()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Execute Destructive Cleanup?",
-                                subtitle: "Claude Code • Bash",
-                                command: "rm -rf node_modules && npm test",
-                                risk: .high,
-                                agent: "Claude Code",
-                                symbol: pClaude.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 2. Cowork (Claude Desktop)
-                    let pCowork = PillCatalog.definition(for: "cowork")
-                    agentCard(
-                        pill: pCowork,
-                        details: "Model Context Protocol in claude_desktop_config.json",
-                        isInstalled: coworkInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installCoworkMCP()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Read SSH Private Key?",
-                                subtitle: "Cowork • KeyAccess",
-                                command: "cat ~/.ssh/id_rsa | base64",
-                                risk: .high,
-                                agent: "Cowork",
-                                symbol: pCowork.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 3. Antigravity & IDE
-                    let pAgy = PillCatalog.definition(for: "antigravity")
-                    agentCard(
-                        pill: pAgy,
-                        details: "Native hooks in ~/.gemini/config/hooks.json & Antigravity MCP tool registry",
-                        isInstalled: antigravityInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installAntigravityHooks()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Deploy Service to Cloud Run?",
-                                subtitle: "Antigravity • CloudRun",
-                                command: "gcloud run deploy agent-sentinel --region=us-central1",
-                                risk: .medium,
-                                agent: "Antigravity",
-                                symbol: pAgy.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 4. Cursor
-                    let pCursor = PillCatalog.definition(for: "cursor")
-                    agentCard(
-                        pill: pCursor,
-                        details: "Workspace MCP server configured in ~/.cursor/mcp.json",
-                        isInstalled: cursorInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installCursorMCP()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Force Push to Main Branch?",
-                                subtitle: "Cursor • GitSync",
-                                command: "git push origin main --force",
-                                risk: .high,
-                                agent: "Cursor",
-                                symbol: pCursor.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 5. Codex
-                    let pCodex = PillCatalog.definition(for: "codex")
-                    agentCard(
-                        pill: pCodex,
-                        details: "Native hook in ~/.codex/hooks.json (PermissionRequest)",
-                        isInstalled: codexInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installCodexHooks()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Install System Dependencies?",
-                                subtitle: "Codex • PipInstaller",
-                                command: "python3 -m pip install -r requirements.txt",
-                                risk: .low,
-                                agent: "Codex",
-                                symbol: pCodex.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 6. ChatGPT Desktop
-                    let pGpt = PillCatalog.definition(for: "chatgpt")
-                    agentCard(
-                        pill: pGpt,
-                        details: "Custom Agent SDK & Codex Gateway Bridge",
-                        isInstalled: chatgptInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installCodexHooks()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Execute Database Migration?",
-                                subtitle: "ChatGPT • SchemaMigrator",
-                                command: "DROP TABLE legacy_users; ALTER TABLE accounts ADD COLUMN tier TEXT;",
-                                risk: .high,
-                                agent: "ChatGPT",
-                                symbol: pGpt.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 7. Copilot CLI
-                    let pCopilot = PillCatalog.definition(for: "copilot")
-                    agentCard(
-                        pill: pCopilot,
-                        details: "GitHub Copilot hooks in ~/.copilot/hooks/sentinel.json",
-                        isInstalled: copilotInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installCopilotHooks()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Create Pull Request & Auto-Merge?",
-                                subtitle: "Copilot CLI • GitHubAction",
-                                command: "gh pr merge 42 --auto --squash",
-                                risk: .medium,
-                                agent: "Copilot CLI",
-                                symbol: pCopilot.iconSystemName
-                            )
-                        }
-                    )
-
-                    // 8. Terminal Shell Gate
-                    let pTerm = PillCatalog.definition(for: "terminal")
-                    agentCard(
-                        pill: pTerm,
-                        details: "ZSH preexec auto-interceptor in ~/.zshrc",
-                        isInstalled: zshInstalled,
-                        onInstall: {
-                            try? HookInstaller.shared.installZshHook()
-                            checkStatus()
-                        },
-                        onTest: {
-                            triggerTest(
-                                title: "Delete Build Cache Permanently?",
-                                subtitle: "Terminal • Shell Gate",
-                                command: "rm -rf ~/Projects/old-build",
-                                risk: .high,
-                                agent: "Terminal",
-                                symbol: pTerm.iconSystemName
-                            )
-                        }
-                    )
-                }
-
-                // SDK & Code Snippets Drawer
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Universal Developer SDK & Code Snippets")
-                                .font(.system(size: 15, weight: .bold))
-                            Text("Integrate the liquid glass permission gate into any custom agent pipeline:")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-
-                        Picker("Language", selection: $selectedSnippet) {
-                            Text("Python SDK").tag(0)
-                            Text("Node.js SDK").tag(1)
-                            Text("MCP Config").tag(2)
-                            Text("ZSH Hook").tag(3)
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 380)
-                    }
-
-                    VStack(alignment: .trailing, spacing: 8) {
-                        let activeCode = selectedSnippet == 0 ? pythonSnippet : (selectedSnippet == 1 ? nodeSnippet : (selectedSnippet == 2 ? mcpJsonSnippet : zshSnippet))
-
-                        VStack(alignment: .leading, spacing: 0) {
-                            // Mini terminal header
-                            HStack(spacing: 5) {
-                                Circle().fill(Color.red.opacity(0.8)).frame(width: 7, height: 7)
-                                Circle().fill(Color.yellow.opacity(0.8)).frame(width: 7, height: 7)
-                                Circle().fill(Color.green.opacity(0.8)).frame(width: 7, height: 7)
-                                Text("code-preview")
-                                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.leading, 4)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color.black.opacity(0.5))
-
-                            Text(activeCode)
-                                .font(.system(size: 11.5, design: .monospaced))
-                                .padding(14)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .background(Color.black.opacity(0.35))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(activeCode, forType: .string)
-                            copiedSnippet = true
-                            SoundEngine.shared.playTick()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                copiedSnippet = false
-                            }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: copiedSnippet ? "checkmark" : "doc.on.doc")
-                                Text(copiedSnippet ? "Copied to Clipboard" : "Copy Code Snippet")
-                                    .font(.system(size: 12, weight: .medium))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.primary.opacity(0.08), in: Capsule())
-                            .foregroundStyle(copiedSnippet ? Color.green : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
+                headerBanner
+                agentGrid
+                snippetsDrawer
             }
             .padding(24)
         }
         .onAppear {
             checkStatus()
         }
+    }
+
+    // Split into separate properties so the Swift type checker handles each part on its own.
+    private var headerBanner: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Universal AI Agent Hub & Integrations")
+                        .font(.system(size: 18, weight: .bold))
+                    Text("Powered by loggdin: seamlessly intercepts actions across Claude Code, Cowork, Antigravity, Cursor, Codex, ChatGPT, Copilot, and Terminal.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+
+                Button {
+                    _ = HookInstaller.shared.installAll()
+                    checkStatus()
+                    SoundEngine.shared.playAllow()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: allInstalled ? "checkmark.circle.fill" : "bolt.shield.fill")
+                        Text(allInstalled ? "All Agents Guarded" : "1-Click Setup All")
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(allInstalled ? Color.green : Color.blue, in: Capsule())
+                    .foregroundStyle(.white)
+                    .shadow(color: (allInstalled ? Color.green : Color.blue).opacity(0.4), radius: 8, y: 3)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
+    }
+
+    // 8 Core Agent Integration Bento Grid
+    private var agentGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+            agentCardsCore
+            agentCardsMore
+        }
+    }
+
+    @ViewBuilder
+    private var agentCardsCore: some View {
+        // 1. Claude Code
+        let pClaude = PillCatalog.definition(for: "claude-code")
+        agentCard(
+            pill: pClaude,
+            details: "Native hook in ~/.claude/settings.json (PermissionRequest, PreToolUse, AskUserQuestion)",
+            isInstalled: claudeInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installClaudeCodeHooks()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Execute Destructive Cleanup?",
+                    subtitle: "Claude Code • Bash",
+                    command: "rm -rf node_modules && npm test",
+                    risk: .high,
+                    agent: "Claude Code",
+                    symbol: pClaude.iconSystemName
+                )
+            }
+        )
+
+        // 2. Cowork (Claude Desktop)
+        let pCowork = PillCatalog.definition(for: "cowork")
+        agentCard(
+            pill: pCowork,
+            details: "Model Context Protocol in claude_desktop_config.json",
+            isInstalled: coworkInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installCoworkMCP()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Read SSH Private Key?",
+                    subtitle: "Cowork • KeyAccess",
+                    command: "cat ~/.ssh/id_rsa | base64",
+                    risk: .high,
+                    agent: "Cowork",
+                    symbol: pCowork.iconSystemName
+                )
+            }
+        )
+
+        // 3. Antigravity & IDE
+        let pAgy = PillCatalog.definition(for: "antigravity")
+        agentCard(
+            pill: pAgy,
+            details: "Native hooks in ~/.gemini/config/hooks.json & Antigravity MCP tool registry",
+            isInstalled: antigravityInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installAntigravityHooks()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Deploy Service to Cloud Run?",
+                    subtitle: "Antigravity • CloudRun",
+                    command: "gcloud run deploy agent-sentinel --region=us-central1",
+                    risk: .medium,
+                    agent: "Antigravity",
+                    symbol: pAgy.iconSystemName
+                )
+            }
+        )
+
+        // 4. Cursor
+        let pCursor = PillCatalog.definition(for: "cursor")
+        agentCard(
+            pill: pCursor,
+            details: "Workspace MCP server configured in ~/.cursor/mcp.json",
+            isInstalled: cursorInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installCursorMCP()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Force Push to Main Branch?",
+                    subtitle: "Cursor • GitSync",
+                    command: "git push origin main --force",
+                    risk: .high,
+                    agent: "Cursor",
+                    symbol: pCursor.iconSystemName
+                )
+            }
+        )
+
+    }
+
+    @ViewBuilder
+    private var agentCardsMore: some View {
+        // 5. Codex
+        let pCodex = PillCatalog.definition(for: "codex")
+        agentCard(
+            pill: pCodex,
+            details: "Native hook in ~/.codex/hooks.json (PermissionRequest)",
+            isInstalled: codexInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installCodexHooks()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Install System Dependencies?",
+                    subtitle: "Codex • PipInstaller",
+                    command: "python3 -m pip install -r requirements.txt",
+                    risk: .low,
+                    agent: "Codex",
+                    symbol: pCodex.iconSystemName
+                )
+            }
+        )
+
+        // 6. ChatGPT Desktop
+        let pGpt = PillCatalog.definition(for: "chatgpt")
+        agentCard(
+            pill: pGpt,
+            details: "Custom Agent SDK & Codex Gateway Bridge",
+            isInstalled: chatgptInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installCodexHooks()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Execute Database Migration?",
+                    subtitle: "ChatGPT • SchemaMigrator",
+                    command: "DROP TABLE legacy_users; ALTER TABLE accounts ADD COLUMN tier TEXT;",
+                    risk: .high,
+                    agent: "ChatGPT",
+                    symbol: pGpt.iconSystemName
+                )
+            }
+        )
+
+        // 7. Copilot CLI
+        let pCopilot = PillCatalog.definition(for: "copilot")
+        agentCard(
+            pill: pCopilot,
+            details: "GitHub Copilot hooks in ~/.copilot/hooks/sentinel.json",
+            isInstalled: copilotInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installCopilotHooks()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Create Pull Request & Auto-Merge?",
+                    subtitle: "Copilot CLI • GitHubAction",
+                    command: "gh pr merge 42 --auto --squash",
+                    risk: .medium,
+                    agent: "Copilot CLI",
+                    symbol: pCopilot.iconSystemName
+                )
+            }
+        )
+
+        // 8. Terminal Shell Gate
+        let pTerm = PillCatalog.definition(for: "terminal")
+        agentCard(
+            pill: pTerm,
+            details: "ZSH preexec auto-interceptor in ~/.zshrc",
+            isInstalled: zshInstalled,
+            onInstall: {
+                try? HookInstaller.shared.installZshHook()
+                checkStatus()
+            },
+            onTest: {
+                triggerTest(
+                    title: "Delete Build Cache Permanently?",
+                    subtitle: "Terminal • Shell Gate",
+                    command: "rm -rf ~/Projects/old-build",
+                    risk: .high,
+                    agent: "Terminal",
+                    symbol: pTerm.iconSystemName
+                )
+            }
+        )
+    }
+
+    // SDK & Code Snippets Drawer
+    private var snippetsDrawer: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Universal Developer SDK & Code Snippets")
+                        .font(.system(size: 15, weight: .bold))
+                    Text("Integrate the liquid glass permission gate into any custom agent pipeline:")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+
+                Picker("Language", selection: $selectedSnippet) {
+                    Text("Python SDK").tag(0)
+                    Text("Node.js SDK").tag(1)
+                    Text("MCP Config").tag(2)
+                    Text("ZSH Hook").tag(3)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 380)
+            }
+
+            VStack(alignment: .trailing, spacing: 8) {
+                let activeCode = selectedSnippet == 0 ? pythonSnippet : (selectedSnippet == 1 ? nodeSnippet : (selectedSnippet == 2 ? mcpJsonSnippet : zshSnippet))
+
+                VStack(alignment: .leading, spacing: 0) {
+                    // Mini terminal header
+                    HStack(spacing: 5) {
+                        Circle().fill(Color.red.opacity(0.8)).frame(width: 7, height: 7)
+                        Circle().fill(Color.yellow.opacity(0.8)).frame(width: 7, height: 7)
+                        Circle().fill(Color.green.opacity(0.8)).frame(width: 7, height: 7)
+                        Text("code-preview")
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 4)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.5))
+
+                    Text(activeCode)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .background(Color.black.opacity(0.35))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(activeCode, forType: .string)
+                    copiedSnippet = true
+                    SoundEngine.shared.playTick()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedSnippet = false
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: copiedSnippet ? "checkmark" : "doc.on.doc")
+                        Text(copiedSnippet ? "Copied to Clipboard" : "Copy Code Snippet")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .foregroundStyle(copiedSnippet ? Color.green : Color.primary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
     }
 
     private func agentCard(

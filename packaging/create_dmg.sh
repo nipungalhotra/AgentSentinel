@@ -12,33 +12,32 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
 APP_BUNDLE="$DIST_DIR/Loggdin.app"
 DMG_OUTPUT="$DIST_DIR/Loggdin.dmg"
-VERSION="1.2.0"
+# Single source of truth for the version: packaging/Info.plist
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PROJECT_ROOT/packaging/Info.plist")"
+
+# Optional release signing / notarization (required for smooth installs on other Macs):
+#   CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+#   NOTARY_PROFILE="loggdin-notary"   # created once with: xcrun notarytool store-credentials
+#   NOTARY_KEYCHAIN=/path/to.keychain  # optional: keychain holding that profile (CI)
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 
 echo "=========================================================="
 echo "🛡️  loggdin Production Release Packager (v${VERSION})"
 echo "=========================================================="
 
-echo "🔨 [1/5] Compiling release binary with swift build..."
+echo "🔨 [1/5] Compiling universal (arm64 + x86_64) release binary..."
 cd "$PROJECT_ROOT"
-swift build -c release
+swift build -c release --arch arm64 --arch x86_64
 
-RELEASE_BIN=""
-CANDIDATE_PATHS=(
-    "$PROJECT_ROOT/.build/arm64-apple-macosx/release/loggdin"
-    "$PROJECT_ROOT/.build/release/loggdin"
-    "$PROJECT_ROOT/.build/out/Products/Release/loggdin"
-    "$PROJECT_ROOT/.build/apple/Products/Release/loggdin"
-)
-
-for p in "${CANDIDATE_PATHS[@]}"; do
-    if [ -f "$p" ] && [ -x "$p" ]; then
-        RELEASE_BIN="$p"
-        break
-    fi
-done
-
-if [ -z "$RELEASE_BIN" ]; then
-    echo "❌ Error: Could not locate compiled loggdin release binary in .build/"
+RELEASE_BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/loggdin"
+if [ ! -x "$RELEASE_BIN" ]; then
+    echo "❌ Error: Could not locate compiled loggdin release binary at $RELEASE_BIN"
+    exit 1
+fi
+ARCHS="$(lipo -archs "$RELEASE_BIN")"
+if [[ "$ARCHS" != *arm64* || "$ARCHS" != *x86_64* ]]; then
+    echo "❌ Error: release binary is not universal (archs: $ARCHS)"
     exit 1
 fi
 echo "✓ Found compiled release binary: $RELEASE_BIN"
@@ -83,16 +82,32 @@ if [ -f "$PROJECT_ROOT/bin/sentinel-mcp.js" ]; then
     cp "$PROJECT_ROOT/bin/sentinel-mcp.js" "$APP_BUNDLE/Contents/Resources/sentinel-mcp.js"
     chmod 755 "$APP_BUNDLE/Contents/Resources/bin/sentinel-mcp.js" "$APP_BUNDLE/Contents/Resources/sentinel-mcp.js"
 fi
+if [ -f "$PROJECT_ROOT/bin/loggdin.py" ]; then
+    cp "$PROJECT_ROOT/bin/loggdin.py" "$APP_BUNDLE/Contents/Resources/bin/loggdin.py"
+    chmod 755 "$APP_BUNDLE/Contents/Resources/bin/loggdin.py"
+fi
+# The original sentinel script is kept as sentinel-installer (zsh integration);
+# `sentinel` itself is an alias of the loggdin CLI.
+if [ -f "$PROJECT_ROOT/bin/sentinel" ]; then
+    cp "$PROJECT_ROOT/bin/sentinel" "$APP_BUNDLE/Contents/Resources/bin/sentinel-installer"
+    chmod 755 "$APP_BUNDLE/Contents/Resources/bin/sentinel-installer"
+fi
 ln -sf "loggdin" "$APP_BUNDLE/Contents/Resources/bin/sentinel"
 
 echo "✓ Loggdin.app assembled cleanly at: $APP_BUNDLE"
 
-# Ad-hoc or Developer ID code signing
-if command -v codesign >/dev/null 2>&1; then
-    SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
-    echo "🔏 Signing application bundle (Identity: $SIGN_IDENTITY)..."
-    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_BUNDLE" 2>/dev/null || true
+# Code signing. Ad-hoc signatures are rejected by Gatekeeper on every Mac except
+# the one that built the app, so a public release MUST use a Developer ID.
+xattr -cr "$APP_BUNDLE"
+if [ -n "$CODESIGN_IDENTITY" ]; then
+    echo "🔏 Signing with Developer ID + hardened runtime: $CODESIGN_IDENTITY"
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+else
+    echo "⚠️  CODESIGN_IDENTITY not set — ad-hoc signing (LOCAL TESTING ONLY)."
+    echo "   Other Macs will show \"Apple could not verify Loggdin\" and refuse to open it."
+    codesign --force --sign - "$APP_BUNDLE"
 fi
+codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
 echo "💿 [3/5] Staging disk image contents..."
 TMP_DMG_DIR="$(mktemp -d -t loggdin_dmg)"
@@ -123,7 +138,8 @@ EOF
 chmod 755 "$TMP_DMG_DIR/Install CLI.command"
 
 echo "💿 [4/5] Building compressed read-only DMG with hdiutil..."
-rm -f "$DMG_OUTPUT" "$DIST_DIR/loggdin-v${VERSION}.dmg"
+VERSIONED_DMG="$DIST_DIR/loggdin-v${VERSION}.dmg"
+rm -f "$DMG_OUTPUT" "$VERSIONED_DMG"
 hdiutil create -volname "loggdin" \
     -srcfolder "$TMP_DMG_DIR" \
     -ov -format UDZO \
@@ -131,8 +147,20 @@ hdiutil create -volname "loggdin" \
 
 rm -rf "$TMP_DMG_DIR"
 
-# Also symlink or copy to versioned DMG name
-cp "$DMG_OUTPUT" "$DIST_DIR/loggdin-v${VERSION}.dmg"
+if [ -n "$CODESIGN_IDENTITY" ]; then
+    codesign --force --timestamp --sign "$CODESIGN_IDENTITY" "$DMG_OUTPUT"
+    if [ -n "$NOTARY_PROFILE" ]; then
+        echo "📨 Submitting DMG to Apple notary service (this can take a few minutes)..."
+        xcrun notarytool submit "$DMG_OUTPUT" --keychain-profile "$NOTARY_PROFILE" ${NOTARY_KEYCHAIN:+--keychain "$NOTARY_KEYCHAIN"} --wait
+        xcrun stapler staple "$DMG_OUTPUT"
+        spctl -a -vvv -t open --context context:primary-signature "$DMG_OUTPUT"
+    else
+        echo "⚠️  NOTARY_PROFILE not set — DMG is signed but NOT notarized; Gatekeeper will still block it."
+    fi
+fi
+
+# Versioned copy — this is the filename the Homebrew casks download
+cp "$DMG_OUTPUT" "$VERSIONED_DMG"
 
 echo "🔒 [5/5] Computing cryptographic SHA256 checksums..."
 SHA256=$(shasum -a 256 "$DMG_OUTPUT" | awk '{print $1}')

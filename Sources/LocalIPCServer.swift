@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import CryptoKit
 
 @MainActor
 final class LocalIPCServer {
@@ -158,22 +159,49 @@ final class LocalIPCServer {
         readData(from: connection)
     }
 
-    private func readData(from connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, _ in
+    private func readData(from connection: NWConnection, buffer: Data = Data()) {
+        // Accumulate until the headers and the full Content-Length body have arrived (a single
+        // receive used to cap requests at 64 KB, truncating large permission requests).
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             Task { @MainActor in
-                guard let self, let data = data, !data.isEmpty else {
-                    if isComplete { connection.cancel() }
+                guard let self else { return }
+                var buf = buffer
+                if let data { buf.append(data) }
+
+                if buf.count > 2_000_000 {
+                    self.sendHTTPResponse(connection: connection, status: "413 Payload Too Large", json: "{\"error\":\"Request too large\"}")
                     return
                 }
-
-                guard let requestString = String(data: data, encoding: .utf8) else {
+                if !LocalIPCServer.isCompleteHTTPRequest(buf) && !isComplete && error == nil {
+                    self.readData(from: connection, buffer: buf)
+                    return
+                }
+                guard !buf.isEmpty else {
+                    connection.cancel()
+                    return
+                }
+                guard let requestString = String(data: buf, encoding: .utf8) else {
                     self.sendHTTPResponse(connection: connection, status: "400 Bad Request", json: "{\"error\":\"Invalid UTF-8\"}")
                     return
                 }
-
                 self.processHTTPRequest(requestString, connection: connection)
             }
         }
+    }
+
+    /// True once `data` holds the complete header block plus `Content-Length` bytes of body.
+    nonisolated static func isCompleteHTTPRequest(_ data: Data) -> Bool {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: separator) else { return false }
+        let headerText = String(decoding: data[data.startIndex..<range.lowerBound], as: UTF8.self)
+        var contentLength = 0
+        for line in headerText.components(separatedBy: "\r\n") {
+            let kv = line.split(separator: ":", maxSplits: 1)
+            if kv.count == 2, kv[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
+                contentLength = Int(kv[1].trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+        }
+        return data.count - range.upperBound >= contentLength
     }
 
     private func processHTTPRequest(_ raw: String, connection: NWConnection) {
@@ -247,16 +275,26 @@ final class LocalIPCServer {
             return
         }
 
-        if method == "GET" && path == "/status" {
+        if method == "GET" && (path == "/status" || path.hasPrefix("/status?")) {
             let grants = RulesEngine.shared.activeGrants.count
             let rules = RulesEngine.shared.storedRules.count
+            // Identity proof: clients send a random challenge and only send their token if we can
+            // HMAC it with the token, so a process squatting this port cannot harvest tokens.
+            var proofField = ""
+            if let q = URLComponents(string: "http://localhost" + path)?.queryItems,
+               let challenge = q.first(where: { $0.name == "challenge" })?.value,
+               (16...128).contains(challenge.count), !authToken.isEmpty {
+                let mac = HMAC<SHA256>.authenticationCode(for: Data(("loggdin-status:" + challenge).utf8),
+                                                          using: SymmetricKey(data: Data(authToken.utf8)))
+                proofField = ",\n    \"proof\": \"" + mac.map { String(format: "%02x", $0) }.joined() + "\""
+            }
             let statusJSON = """
             {
                 "status": "active",
                 "port": \(self.port),
                 "socket": "\(self.socketPath)",
                 "activeGrants": \(grants),
-                "savedRules": \(rules)
+                "savedRules": \(rules)\(proofField)
             }
             """
             sendHTTPResponse(connection: connection, status: "200 OK", json: statusJSON)
@@ -321,7 +359,8 @@ final class LocalIPCServer {
                 decStr = "deny"
             } else if path.hasPrefix("/allow") {
                 decStr = "allow"
-                if path.contains("scope=10m") { scopeStr = "10m" }
+                if path.contains("scope=10m-all") { scopeStr = "10m-all" }
+                else if path.contains("scope=10m") { scopeStr = "10m" }
                 else if path.contains("scope=always") { scopeStr = "always" }
             }
 
@@ -337,15 +376,7 @@ final class LocalIPCServer {
 
             let decision: Decision
             if decStr == "allow" {
-                let scope: AllowScope
-                switch scopeStr {
-                case "10m", "tenminutes", "10_minutes":
-                    scope = .tenMinutes
-                case "always":
-                    scope = .always
-                default:
-                    scope = .once
-                }
+                let scope = AllowScope.parse(scopeStr)
                 decision = .allow(scope)
             } else {
                 decision = .deny
@@ -464,7 +495,9 @@ final class LocalIPCServer {
             return
         }
 
-        let thread = Thread { [weak self] in
+        // The accept loop runs off the main actor; hand each client to the main-actor singleton
+        // instead of capturing `self` across threads (Swift 6 region isolation rejects that).
+        let thread = Thread {
             while true {
                 let clientFD = Darwin.accept(fd, nil, nil)
                 guard clientFD >= 0 else { break }
@@ -477,8 +510,11 @@ final class LocalIPCServer {
                     continue
                 }
 
+                // Read on this background thread (blocking recv must never run on the main actor),
+                // then hand the finished line to the main actor.
+                let line = LocalIPCServer.readLine(from: clientFD)
                 Task { @MainActor in
-                    self?.handleUnixClient(clientFD)
+                    LocalIPCServer.shared.handleUnixClient(clientFD, line: line)
                 }
             }
         }
@@ -488,20 +524,38 @@ final class LocalIPCServer {
         print("[Sentinel IPC] Unix socket listening on \(path)")
     }
 
-    private func handleUnixClient(_ fd: Int32) {
+    /// Reads one newline-terminated message (max 2 MB) from a connected client.
+    nonisolated private static func readLine(from fd: Int32) -> Data {
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         var raw = Data()
-        var buf = [UInt8](repeating: 0, count: 4096)
-        while true {
+        var buf = [UInt8](repeating: 0, count: 65536)
+        while raw.count <= 2_000_000 {
             let n = Darwin.recv(fd, &buf, buf.count, 0)
             if n <= 0 { break }
-            for i in 0..<n {
-                if buf[i] == UInt8(ascii: "\n") { break }
-                raw.append(buf[i])
+            if let nl = buf[0..<n].firstIndex(of: UInt8(ascii: "\n")) {
+                raw.append(contentsOf: buf[0..<nl])
+                break
             }
-            if raw.count > 65536 || buf.contains(UInt8(ascii: "\n")) { break }
+            raw.append(contentsOf: buf[0..<n])
+        }
+        return raw
+    }
+
+    private func handleUnixClient(_ fd: Int32, line raw: Data) {
+        guard !raw.isEmpty, let bodyString = String(data: raw, encoding: .utf8) else {
+            Darwin.close(fd)
+            return
         }
 
-        guard !raw.isEmpty, let bodyString = String(data: raw, encoding: .utf8) else {
+        // Activity notifications from sentinel-hook (SessionStart, PostToolUse, Stop, ...) carry an
+        // "event" key and no "risk". They are not permission requests: acknowledge immediately
+        // instead of queueing a popup and making the agent wait on the hook's socket timeout.
+        if let data = bodyString.data(using: .utf8),
+           let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           obj["event"] != nil, obj["risk"] == nil {
+            let ok = "{\"ok\":true}\n"
+            _ = ok.withCString { Darwin.send(fd, $0, strlen($0), 0) }
             Darwin.close(fd)
             return
         }

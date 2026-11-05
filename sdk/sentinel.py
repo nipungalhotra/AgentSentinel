@@ -8,13 +8,64 @@ import urllib.request
 import urllib.error
 import subprocess
 import os
+import sys
+
+
+def _state_dir():
+    """Per-OS loggdin state dir (matches bin/loggdin.py and the Mac app)."""
+    if os.environ.get("LOGGDIN_HOME"):
+        return os.environ["LOGGDIN_HOME"]
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", "AgentSentinel")
+    if os.name == "nt":
+        return os.path.join(os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming"), "Loggdin")
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"), "loggdin")
+
+
+def _state_files(name):
+    files = [] if os.environ.get("LOGGDIN_HOME") else [os.path.join(os.path.expanduser("~"), ".loggdin", name)]
+    return files + [os.path.join(_state_dir(), name)]
+
+
+def _verify_daemon(target_url, token):
+    """True if the server behind target_url proves it knows `token` (HMAC challenge on /status).
+    Prevents handing the token to another local user's process squatting the port."""
+    import hashlib, hmac, secrets
+    from urllib.parse import urlsplit
+    parts = urlsplit(target_url)
+    challenge = secrets.token_hex(16)
+    try:
+        with urllib.request.urlopen(f"{parts.scheme}://{parts.netloc}/status?challenge={challenge}", timeout=2) as r:
+            proof = json.loads(r.read().decode("utf-8")).get("proof", "")
+    except Exception:
+        return False
+    expected = hmac.new(token.encode("utf-8"), ("loggdin-status:" + challenge).encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(str(proof), expected)
+
+
+def _launch_daemon():
+    """Start loggdin if it is not running (Loggdin.app on macOS, loggdin.py elsewhere)."""
+    if sys.platform == "darwin":
+        for app_candidate in ["/Applications/Loggdin.app", "/Applications/AgentSentinel.app"]:
+            if os.path.exists(app_candidate):
+                subprocess.run(["open", "-g", "-j", app_candidate], check=False)
+                return
+    script = os.path.join(_state_dir(), "loggdin.py")
+    if os.path.exists(script):
+        kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+        if os.name == "nt":
+            kw["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+        else:
+            kw["start_new_session"] = True
+        subprocess.Popen([sys.executable, script, "daemon"], **kw)
 
 def get_sentinel_url(endpoint: str = "ask") -> str:
     if "SENTINEL_URL" in os.environ:
         return os.environ["SENTINEL_URL"]
     port = os.environ.get("SENTINEL_PORT") or os.environ.get("LOGGDIN_PORT")
     if not port:
-        for p in [os.path.expanduser("~/.loggdin/port"), os.path.expanduser("~/Library/Application Support/AgentSentinel/port")]:
+        for p in _state_files("port"):
             if os.path.exists(p):
                 try:
                     with open(p) as f:
@@ -83,15 +134,18 @@ def ask_permission(
     try:
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        token_path = os.path.expanduser("~/.loggdin/token")
-        if not os.path.exists(token_path):
-            token_path = os.path.expanduser("~/Library/Application Support/AgentSentinel/token")
-        if os.path.exists(token_path):
+        token = ""
+        token_path = next((t for t in _state_files("token") if os.path.exists(t)), "")
+        if token_path:
             try:
                 with open(token_path) as f:
-                    headers["X-Loggdin-Token"] = f.read().strip()
+                    token = f.read().strip()
             except Exception:
                 pass
+        if token:
+            if not _verify_daemon(get_sentinel_url("ask"), token):
+                return False   # not the real loggdin daemon: never send it our token
+            headers["X-Loggdin-Token"] = token
 
         target_url = get_sentinel_url("ask")
         req = urllib.request.Request(
@@ -105,10 +159,7 @@ def ask_permission(
     except urllib.error.URLError:
         # If Sentinel is not running, try to launch the app
         try:
-            for app_candidate in ["/Applications/Loggdin.app", "/Applications/AgentSentinel.app"]:
-                if os.path.exists(app_candidate):
-                    subprocess.run(["open", "-g", "-j", app_candidate], check=False)
-                    break
+            _launch_daemon()
         except Exception:
             pass
         return False

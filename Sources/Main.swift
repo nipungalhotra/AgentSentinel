@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockFileDescriptor: Int32 = -1
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = appLaunchDate   // globals are lazy: pin the launch time now
         // Enforce single instance: prevent duplicate processes & menu bar icons
         guard acquireSingleInstanceLock() else {
             print("[loggdin] Another instance is already running. Exiting.")
@@ -60,15 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch action {
         case "allow":
-            let scope: AllowScope
-            switch rawScope {
-            case "10m", "tenminutes", "10_minutes":
-                scope = .tenMinutes
-            case "always":
-                scope = .always
-            default:
-                scope = .once
-            }
+            let scope = AllowScope.parse(rawScope)
             Task { @MainActor in
                 PermissionPopupController.shared.submitExternalDecision(.allow(scope), forRequestId: reqId)
             }
@@ -146,9 +139,38 @@ struct AgentSentinelApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
+        // The real dashboard lives in SentinelManager's own window. A full DashboardView here was a
+        // second, hidden copy whose animations kept rendering in the background (high idle CPU),
+        // so the Settings scene only forwards to that window if it is ever opened.
         Settings {
-            DashboardView()
-                .frame(minWidth: 920, minHeight: 620)
+            SettingsRedirectView()
         }
     }
+}
+
+/// Opens the real dashboard and closes the Settings window that hosted this view.
+struct SettingsRedirectView: View {
+    var body: some View {
+        WindowCloser()
+            .frame(width: 1, height: 1)
+            .onAppear {
+                // SwiftUI may instantiate the Settings scene at launch: just close it then.
+                // Later (e.g. Cmd-,) it means the user asked for settings, so show the dashboard.
+                if Date().timeIntervalSince(appLaunchDate) > 3 {
+                    SentinelManager.shared.openDashboard()
+                }
+            }
+    }
+}
+
+/// Process start time, used to tell launch-time scene creation from a user request.
+let appLaunchDate = Date()
+
+private struct WindowCloser: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { view.window?.close() }
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
