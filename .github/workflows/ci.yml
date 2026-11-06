@@ -115,6 +115,9 @@ jobs:
       - name: Cross-platform daemon, hook & CLI
         run: python tests/test_crossplatform_daemon.py
 
+      - name: Phone approvals (ntfy relay, offline)
+        run: python tests/test_phone_relay.py
+
       - name: SDK, MCP and rules tests
         run: |
           python tests/test_sdk_python.py

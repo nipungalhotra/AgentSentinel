@@ -1692,6 +1692,8 @@ struct RulesTab: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
 
+                PhoneApprovalsCard()
+
                 // Remote Webhook Alerts Relay
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -1760,3 +1762,149 @@ struct RulesTab: View {
     }
 }
 
+
+// MARK: - Phone approvals (ntfy)
+
+struct PhoneApprovalsCard: View {
+    @State private var config: PhoneConfig? = PhoneRelay.shared.config
+    @State private var status: String?
+    @State private var testing = false
+
+    private var subscribeURL: String? {
+        guard let c = config else { return nil }
+        return "\(c.serverURL)/\(c.topic)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Approve from your phone")
+                        .font(.system(size: 16, weight: .bold))
+                    Text("When you are away from the Mac (screen locked, idle for a minute, or no answer within the delay), the request shows up as a notification on your phone with Allow and Deny buttons. Uses the free ntfy app. \"Always\" stays on the Mac.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Toggle("", isOn: Binding(
+                    get: { config?.enabled == true },
+                    set: { on in PhoneRelay.shared.setEnabled(on); refresh() }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityLabel("Phone approvals")
+            }
+
+            if let c = config, c.enabled, let url = subscribeURL {
+                HStack(alignment: .top, spacing: 18) {
+                    if let qr = Self.qrImage(url) {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 132, height: 132)
+                            .padding(8)
+                            .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .accessibilityLabel("QR code for the ntfy topic")
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("1. Install **ntfy** on your phone (App Store or Google Play).")
+                        Text("2. Tap **+** and subscribe to this topic, or scan the code:")
+                        HStack(spacing: 8) {
+                            Text(c.topic)
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .textSelection(.enabled)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(c.topic, forType: .string)
+                                status = "Topic copied."
+                            }
+                            .controlSize(.small)
+                        }
+                        if c.serverURL != PhoneRelay.defaultServer {
+                            Text("Server: \(c.serverURL)").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        }
+                        Text("3. Send a test and tap Allow on your phone.")
+                        Text("Keep the topic private: anyone who has it can see your requests.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 12.5))
+                }
+
+                HStack(spacing: 14) {
+                    Picker("Send after", selection: Binding(
+                        get: { Int(c.pushAfter) },
+                        set: { v in PhoneRelay.shared.update { $0.pushAfter = Double(v) }; refresh() })) {
+                        Text("Right away").tag(0)
+                        Text("10 s").tag(10)
+                        Text("15 s").tag(15)
+                        Text("30 s").tag(30)
+                    }
+                    .frame(width: 190)
+                    Toggle("Hide commands on the phone", isOn: Binding(
+                        get: { c.details == "minimal" },
+                        set: { v in PhoneRelay.shared.update { $0.details = v ? "minimal" : "full" }; refresh() }))
+                        .toggleStyle(.checkbox)
+                }
+                .font(.system(size: 12.5))
+
+                HStack(spacing: 12) {
+                    Button(testing ? "Waiting for your phone…" : "Send Test") { test() }
+                        .disabled(testing)
+                        .controlSize(.small)
+                    Button("New Topic") {
+                        PhoneRelay.shared.setUp(newTopic: true)
+                        refresh()
+                        status = "New topic created. Subscribe to it on your phone again."
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                    if let status {
+                        Text(status)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
+        .onAppear { refresh() }
+    }
+
+    private func refresh() {
+        config = PhoneRelay.shared.config
+    }
+
+    private func test() {
+        testing = true
+        status = "Sent. Tap a button on your phone."
+        Task {
+            let err = await PhoneRelay.shared.sendTest { decision in
+                testing = false
+                switch decision {
+                case .allow: status = "Phone works: you tapped Allow."; SoundEngine.shared.playAllow()
+                case .deny: status = "Phone works: you tapped Deny."; SoundEngine.shared.playAllow()
+                case .timeout: status = "No answer in 90 s. Check the ntfy subscription."; SoundEngine.shared.playDeny()
+                }
+            }
+            if let err {
+                testing = false
+                status = err
+                SoundEngine.shared.playDeny()
+            }
+        }
+    }
+
+    static func qrImage(_ text: String) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
+        let rep = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
+    }
+}

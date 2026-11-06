@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         SentinelManager.shared.startup()
+        _ = PhoneRelay.shared   // start listening for phone replies if phone approvals are on
         // Dashboard is NOT opened automatically; user can open it from the menu bar if desired.
 
         // Automatically suppress and close any default SwiftUI window created on startup
