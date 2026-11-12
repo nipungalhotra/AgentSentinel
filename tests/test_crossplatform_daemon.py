@@ -23,6 +23,14 @@ DAEMON = os.path.join(ROOT, "bin", "loggdin.py")
 HOOK = os.path.join(ROOT, "bin", "sentinel-hook")
 
 
+def load_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("loggdin_mod", DAEMON)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -177,6 +185,118 @@ class CrossPlatformDaemonTest(unittest.TestCase):
         self.req("POST", "/decision", {"decision": "allow", "scope": "10m"})
         t.join(10)
         self.assertEqual(out["resp"]["scope"], "tenMinutes")
+
+    def test_auto_allow_does_not_extend_ten_minute_grant(self):
+        t, out = self.ask_async({"command": "make grantcheck", "cwd": self.home})
+        self.req("POST", "/decision", {"decision": "allow", "scope": "10m"})
+        t.join(10)
+        before = self.req("GET", "/status")[1]["activeGrants"]
+        # Different commands each time, so the 15 s dedup window can't answer: the grant does.
+        for i in range(3):
+            r = self.req("POST", "/ask", {"command": f"make grantcheck --n={i}", "cwd": self.home})[1]
+            self.assertEqual(r["scope"], "tenMinutes")
+        self.assertEqual(self.req("GET", "/status")[1]["activeGrants"], before,
+                         "auto-allows must not add (and so extend) grants")
+
+    def test_high_risk_approval_is_not_replayed(self):
+        body = {"command": "git push --force origin replay-check", "risk": "high", "cwd": self.home}
+        t, out = self.ask_async(body)
+        self.req("POST", "/decision", {"decision": "allow", "scope": "once"})
+        t.join(10)
+        self.assertTrue(out["resp"]["allowed"])
+        again = self.req("POST", "/ask", dict(body, timeout=1), timeout=15)[1]
+        self.assertEqual(again, {"allowed": False, "decision": "timeout"})
+
+    def test_copilot_hook_command_is_valid_shell(self):
+        r = self.cli("install", "copilot")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(os.path.join(self.home, ".copilot", "hooks", "sentinel.json")) as f:
+            cfg = json.load(f)
+        entry = cfg["hooks"]["preToolUse"][0]
+        if os.name == "nt":
+            cmd = entry["powershell"]
+            self.assertTrue(cmd.startswith("& "), cmd)
+            ps = ("$e=$null;[void][System.Management.Automation.Language.Parser]::ParseInput($env:LG_CMD,"
+                  "[ref]$null,[ref]$e);$e.Count")
+            p = subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=dict(self.env, LG_CMD=cmd),
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.stdout.strip(), "0", p.stdout + p.stderr)
+        else:
+            self.assertNotIn("& ", entry["bash"])
+        self.cli("uninstall", "copilot")
+
+    def test_pending_request_has_countdown(self):
+        t, out = self.ask_async({"command": "echo countdown", "timeout": 30})
+        r = self.req("GET", "/pending?all=1")[1]["requests"][0]
+        self.assertAlmostEqual(r["expiresAt"] - r["createdAt"], 30, delta=0.01)
+        self.req("POST", "/decision", {"decision": "deny"})
+        t.join(10)
+
+    def test_cli_test_demo_request(self):
+        done = {}
+        th = threading.Thread(target=lambda: done.update(r=self.cli("test", "cursor")))
+        th.start()
+        for _ in range(100):
+            pend = self.req("GET", "/pending")[1]
+            if pend.get("hasPending"):
+                break
+            time.sleep(0.05)
+        self.assertEqual((pend["requestedBy"], pend["risk"]), ("cursor", "high"))
+        self.req("POST", "/decision", {"decision": "deny"})
+        th.join(30)
+        self.assertEqual(done["r"].returncode, 0, done["r"].stdout + done["r"].stderr)
+        self.assertIn("deny", done["r"].stdout)
+
+    def test_windows_wipe_commands_are_catastrophic(self):
+        lg = load_module()
+        for c in ("Remove-Item -Recurse -Force C:\\", "Remove-Item C:\\* -Recurse", "ri -r -fo D:/",
+                  "rmdir /s /q C:\\", "rd /S /Q c:", "del /f /s /q C:\\*", "rm -rf C:/", "rm -rf /c/",
+                  "cd x && rmdir /s /q C:\\", "format D:", "Format-Volume -DriveLetter D", "Clear-Disk -Number 0",
+                  "diskpart", "vssadmin delete shadows /all /quiet", "rm -rf /"):
+            self.assertTrue(lg.is_catastrophic(c), c)
+        for c in ("Remove-Item -Recurse -Force C:\\Users\\me\\proj\\build", "rmdir /s /q build", "rd /s /q dist",
+                  "rm -rf ./dist", "del C:\\temp\\a.txt", "git status", "npm run format", "echo C:\\"):
+            self.assertFalse(lg.is_catastrophic(c), c)
+
+    def test_approval_card_logic(self):
+        lg = load_module()
+        self.assertEqual(lg.pill_for("claude-code")[0], "Claude Code")
+        self.assertEqual(lg.pill_for("Antigravity IDE")[0], "Antigravity")
+        self.assertEqual(lg.pill_for("Terminal")[0], "Terminal")
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+        except Exception as e:
+            self.skipTest(f"no GUI: {e}")
+        try:
+            card = lg.ApprovalCard(root, autostart=False)
+            posted = []
+            card.api = lambda m, p, b=None: posted.append(b) or {}
+            now = time.time()
+            req = {"id": "A", "title": "Codex Request", "requestedBy": "codex", "risk": "medium", "command": "pytest",
+                   "directory": "~", "modifiesFiles": "Unknown", "diffPreview": "+a\n-b", "createdAt": now, "expiresAt": now + 60}
+            card.queue = [req]
+            card.show(req)
+            card.details = True
+            card.render()
+            card.decide(False, keyboard=True)
+            self.assertEqual(posted, [], "keys are ignored right after the card appears")
+            card.armed_at = 0
+            card.scope_i = 3
+            card.key_allow()
+            self.assertEqual(posted[-1], {"requestId": "A", "decision": "allow", "scope": "always"})
+            card.after_resolved()
+            self.assertFalse(card.visible)
+            high = dict(req, id="H", risk="high")
+            card.queue = [high]
+            card.show(high)
+            card.armed_at = 0
+            card.key_allow()
+            self.assertEqual(len(posted), 1, "Enter never approves a high-risk request")
+            card.decide(True, held=True)
+            self.assertEqual(posted[-1]["scope"], "once")
+        finally:
+            root.destroy()
 
     def test_rule_cannot_be_extended_with_shell_operators(self):
         t, out = self.ask_async({"command": "make lint", "cwd": self.home})
@@ -357,6 +477,11 @@ class CrossPlatformDaemonTest(unittest.TestCase):
         hook = os.path.join(lone, "sentinel-hook")
         r = subprocess.run([sys.executable, hook, "--agent", "claude"], env=env, input=payload,
                            capture_output=True, text=True, timeout=30)
+        # Default: no decision at all, so the agent shows its own permission prompt.
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "")
+        r = subprocess.run([sys.executable, hook, "--agent", "claude"], env=dict(env, LOGGDIN_FAIL_OPEN="1"),
+                           input=payload, capture_output=True, text=True, timeout=30)
         self.assertEqual(json.loads(r.stdout)["hookSpecificOutput"]["decision"]["behavior"], "allow")
         r = subprocess.run([sys.executable, hook, "--agent", "claude"], env=dict(env, LOGGDIN_FAIL_CLOSED="1"),
                            input=payload, capture_output=True, text=True, timeout=30)

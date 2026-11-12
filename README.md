@@ -104,13 +104,22 @@ Use `--no-agents` / `-NoAgents` to skip that step, and `--uninstall` / `-Uninsta
 
 | | macOS app | Windows / Linux daemon |
 |---|---|---|
-| Approve requests | Notch popup, Touch ID | `loggdin ui` web page, `loggdin allow` / `deny` |
-| Notifications | Built in | Windows balloon, Linux `notify-send` |
+| Approve requests | Notch popup, Touch ID | Approval card at the top of the screen (hold to allow for high risk), `loggdin ui` web page, `loggdin allow` / `deny` |
+| Notifications | Built in | The card; Windows balloon / Linux `notify-send` if no GUI toolkit (tkinter) is available |
 | Start at login | Login item | Startup folder / XDG autostart |
 | State folder | `~/Library/Application Support/AgentSentinel` | `%APPDATA%\Loggdin` / `~/.config/loggdin` |
 | Rules, 10-min grants, audit chain | Yes | Yes |
 
 Set `LOGGDIN_HOME` to use a different state folder. Node.js is only needed for the MCP integration.
+
+Try the card with `loggdin test` (or `loggdin test cursor` for a high-risk one); demo requests are
+never executed. Keys: Enter allows, Esc denies, ←/→ or Tab change the scope. The card follows the
+Windows light/dark app theme; set `LOGGDIN_THEME=light|dark` to override, or `LOGGDIN_POPUP=0` to
+turn it off and use notifications only.
+
+If loggdin isn't running, the hooks give no answer, so each agent falls back to its own permission
+prompt. Set `LOGGDIN_FAIL_CLOSED=1` to deny instead, or `LOGGDIN_FAIL_OPEN=1` to approve everything
+(the old default).
 
 
 
