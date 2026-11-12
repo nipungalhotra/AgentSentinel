@@ -29,6 +29,8 @@ Usage:
     loggdin uninstall <same targets>
     loggdin autostart [on|off]
     loggdin run <command...>       ask before running a shell command
+    loggdin phone setup | test | on | off | status | delay <s> | details <full|minimal>
+                                   approve from your phone's notifications (ntfy)
     loggdin doctor | version
 """
 
@@ -36,6 +38,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -564,12 +567,330 @@ button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.d
 """
 
 
+# ---------------------------------------------------------------------------
+# Phone approvals over ntfy (https://ntfy.sh): a native push notification on
+# the phone with Allow / Deny buttons. Outbound only: this computer publishes
+# to a secret topic and listens on a secret reply topic, so nothing is exposed
+# to the internet. Every button carries a one-time HMAC signature bound to one
+# request, so a forged or replayed reply is ignored. "Always" and "all folders"
+# are never offered on the phone. Protocol is shared with Sources/PhoneRelay.swift.
+# ---------------------------------------------------------------------------
+
+PHONE_DEFAULT_SERVER = "https://ntfy.sh"
+PHONE_TOPIC_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"   # no 0/o/1/l: easy to type on a phone
+PHONE_VERBS = {"allow-once": ("allow", "once"), "allow-10m": ("allow", "10m"), "deny": ("deny", "")}
+
+
+def phone_path():
+    return os.path.join(state_dir(), "phone.json")
+
+
+def load_phone():
+    try:
+        with open(phone_path(), "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(cfg, dict) or not cfg.get("topic") or not cfg.get("secret"):
+        return None
+    cfg.setdefault("enabled", True)
+    cfg["server"] = str(cfg.get("server") or PHONE_DEFAULT_SERVER).rstrip("/")
+    try:
+        cfg["pushAfter"] = max(0.0, min(float(cfg.get("pushAfter", 15)), 100.0))
+    except (TypeError, ValueError):
+        cfg["pushAfter"] = 15.0
+    cfg["details"] = "minimal" if cfg.get("details") == "minimal" else "full"
+    # "auto": phone after the delay. "both" / "phone" (set in the Mac dashboard): push at once.
+    cfg["mode"] = cfg.get("mode") if cfg.get("mode") in ("both", "phone") else "auto"
+    tokens = cfg.get("pushTokens") if isinstance(cfg.get("pushTokens"), list) else []
+    cfg["pushTokens"] = [t for t in tokens if phone_is_push_token(t)][-PHONE_MAX_PUSH_TOKENS:]
+    return cfg
+
+
+# The loggdin phone app (mobile/) registers itself by posting "lg1-push <Expo push token>" to the
+# reply topic. It then gets a short "request waiting" notification through Expo's push service;
+# the command text never goes that way. Shared with Sources/PhoneRelay.swift.
+PHONE_EXPO_PUSH_URL = os.environ.get("LOGGDIN_EXPO_PUSH_URL", "https://exp.host/--/api/v2/push/send")
+PHONE_MAX_PUSH_TOKENS = 5
+PHONE_PUSH_TOKEN_RE = re.compile(r"^Expo(nent)?PushToken\[[A-Za-z0-9_-]{10,100}\]$")
+
+
+def phone_pair_key(secret):
+    """Pairing key derived from the secret; the phone signs its registration with it."""
+    return hmac.new(secret.encode("utf-8"), b"loggdin-phone|v1|pair", hashlib.sha256).hexdigest()[:16]
+
+
+def phone_pairing_code(cfg):
+    return f"{cfg['topic']}.{phone_pair_key(cfg['secret'])}"
+
+
+def phone_is_push_token(value):
+    return isinstance(value, str) and bool(PHONE_PUSH_TOKEN_RE.match(value))
+
+
+def phone_parse_push_registration(text, secret):
+    """'lg1-push <token> <sig>': accepted only when signed with the pairing key."""
+    parts = str(text or "").split()
+    if len(parts) != 3 or parts[0] != "lg1-push" or not phone_is_push_token(parts[1]):
+        return None
+    key = phone_pair_key(secret).encode("utf-8")
+    expected = hmac.new(key, f"loggdin-phone|v1|push|{parts[1]}".encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return parts[1] if hmac.compare_digest(expected, parts[2]) else None
+
+
+def phone_register_push_token(token):
+    cfg = load_phone()
+    if not cfg or token in cfg["pushTokens"]:
+        return False
+    cfg["pushTokens"] = (cfg["pushTokens"] + [token])[-PHONE_MAX_PUSH_TOKENS:]
+    save_phone(cfg)
+    return True
+
+
+def phone_app_notify(cfg, req):
+    """Tells phones running the loggdin app that a request is waiting (agent, risk and folder only)."""
+    if not cfg.get("pushTokens"):
+        return True, None
+    title, minimal = phone_message(dict(cfg, details="minimal"), req)
+    messages = [{"to": t, "title": title, "body": f"{minimal} Open loggdin to answer.", "sound": "default",
+                 "priority": "high", "channelId": "requests", "ttl": 110, "data": {"seq": phone_seq(req["id"])}}
+                for t in cfg["pushTokens"]]
+    return phone_request("POST", PHONE_EXPO_PUSH_URL, messages)
+
+
+def new_phone_config(server=None):
+    topic = "loggdin-" + "".join(secrets.choice(PHONE_TOPIC_ALPHABET) for _ in range(20))
+    return {"enabled": True, "server": (server or PHONE_DEFAULT_SERVER).rstrip("/"), "topic": topic,
+            "secret": secrets.token_hex(32), "pushAfter": 15, "details": "full"}
+
+
+def save_phone(cfg):
+    write_private(phone_path(), json.dumps(cfg, indent=2))
+
+
+def phone_sig(secret, req_id, verb):
+    msg = f"loggdin-phone|v1|{req_id}|{verb}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:32]
+
+
+def phone_reply_topic(cfg):
+    return cfg["topic"] + "-reply"
+
+
+def phone_parse_reply(cfg, text):
+    """'lg1 <id> <verb> <sig>' -> (req_id, decision) or None when unsigned/forged."""
+    parts = str(text or "").strip().split()
+    if len(parts) != 4 or parts[0] != "lg1" or parts[2] not in PHONE_VERBS:
+        return None
+    req_id, verb, sig = parts[1], parts[2], parts[3]
+    if not hmac.compare_digest(sig, phone_sig(cfg["secret"], req_id, verb)):
+        return None
+    d, scope = PHONE_VERBS[verb]
+    return req_id, parse_decision(d, scope)
+
+
+def phone_message(cfg, req):
+    agent = req.get("requestedBy") or "An agent"
+    high = req.get("risk") == "high"
+    title = f"{agent} needs permission" + (" · HIGH RISK" if high else "")
+    folder = os.path.basename(str(req.get("directory") or "").rstrip("/\\")) or str(req.get("directory") or "~")
+    if cfg.get("details") == "minimal":
+        body = f"{req.get('risk', 'low').capitalize()} risk request in {folder}."
+    elif req.get("secretWarnings"):
+        body = f"Command hidden: it looks like it contains a secret.\nFolder: {folder}"
+    else:
+        cmd = str(req.get("command") or "")
+        cmd = cmd if len(cmd) <= 300 else cmd[:299] + "…"
+        body = f"{cmd}\nFolder: {folder}"
+    return title, body
+
+
+# End-to-end encryption of what goes through the relay. The key comes from the pairing key, which
+# only the QR code / pairing code carries, so the relay and anyone who knows the topic see neither the
+# request nor its (signed) answer buttons. Encrypt-then-MAC with HMAC-SHA256 as both the keystream PRF
+# and the MAC, so loggdin Pocket can do the same in plain TypeScript. Shared with PhoneRelay.swift and
+# mobile/src/hmac.ts: "lg1e " + base64(nonce16 || ciphertext || tag16).
+def _phone_keys(cfg):
+    pk = phone_pair_key(cfg["secret"]).encode("utf-8")
+    return (hmac.new(pk, b"loggdin-phone|v1|enc", hashlib.sha256).digest(),
+            hmac.new(pk, b"loggdin-phone|v1|mac", hashlib.sha256).digest())
+
+
+def _phone_stream(enc_key, nonce, n):
+    out, i = b"", 0
+    while len(out) < n:
+        out += hmac.new(enc_key, nonce + i.to_bytes(4, "big"), hashlib.sha256).digest()
+        i += 1
+    return out[:n]
+
+
+def phone_seal(cfg, obj):
+    import base64
+    enc_key, mac_key = _phone_keys(cfg)
+    nonce = secrets.token_bytes(16)
+    plain = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    ct = bytes(a ^ b for a, b in zip(plain, _phone_stream(enc_key, nonce, len(plain))))
+    tag = hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()[:16]
+    return "lg1e " + base64.b64encode(nonce + ct + tag).decode("ascii")
+
+
+def phone_open(cfg, text):
+    """Inverse of phone_seal; None when the text is not ours or was tampered with."""
+    import base64
+    try:
+        raw = base64.b64decode(str(text).split(" ", 1)[1], validate=True) if str(text).startswith("lg1e ") else b""
+    except (ValueError, IndexError):
+        return None
+    if len(raw) < 33:
+        return None
+    enc_key, mac_key = _phone_keys(cfg)
+    nonce, ct, tag = raw[:16], raw[16:-16], raw[-16:]
+    if not hmac.compare_digest(tag, hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()[:16]):
+        return None
+    try:
+        return json.loads(bytes(a ^ b for a, b in zip(ct, _phone_stream(enc_key, nonce, len(ct)))))
+    except ValueError:
+        return None
+
+
+def phone_publish(cfg, req):
+    verbs = [("allow-once", "Allow once")]
+    if req.get("risk") != "high":
+        verbs.append(("allow-10m", "Allow 10 min"))
+    verbs.append(("deny", "Deny"))
+    title, body = phone_message(cfg, req)
+    sealed = phone_seal(cfg, {"t": title, "m": body, "h": req.get("risk") == "high",
+                              "a": [[label, f"lg1 {req['id']} {verb} {phone_sig(cfg['secret'], req['id'], verb)}"]
+                                    for verb, label in verbs]})
+    payload = {"topic": cfg["topic"], "title": "loggdin", "message": sealed,
+               "priority": 5 if req.get("risk") == "high" else 4,
+               "tags": ["warning"] if req.get("risk") == "high" else ["lock"],
+               "sequence_id": phone_seq(req["id"])}
+    return phone_request("POST", cfg["server"] + "/", payload)
+
+
+def phone_seq(req_id):
+    return "lg-" + re.sub(r"[^A-Za-z0-9]", "", str(req_id)).lower()[:40]
+
+
+def phone_clear(cfg, req_id):
+    return phone_request("PUT", f"{cfg['server']}/{cfg['topic']}/{phone_seq(req_id)}/clear", None)
+
+
+def phone_request(method, url, payload, timeout=10):
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json", "User-Agent": f"loggdin/{VERSION}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return 200 <= r.status < 300, ""
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def phone_listen(cfg, on_reply, should_stop, since=None):
+    """Stream the reply topic; calls on_reply(req_id, decision) for every validly signed reply.
+    Returns the last message id seen so a reconnect resumes without losing replies."""
+    url = f"{cfg['server']}/{phone_reply_topic(cfg)}/json?since={since or int(time.time()) - 5}"
+    req = urllib.request.Request(url, headers={"User-Agent": f"loggdin/{VERSION}"})
+    with urllib.request.urlopen(req, timeout=75) as r:          # ntfy sends a keepalive every ~45s
+        for raw in r:
+            if should_stop():
+                break
+            try:
+                msg = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                continue
+            if msg.get("event") != "message":
+                continue
+            since = msg.get("id") or since
+            token = phone_parse_push_registration(msg.get("message"), cfg["secret"])
+            if token:
+                if phone_register_push_token(token):
+                    log("phone: registered a phone for notifications")
+                continue
+            parsed = phone_parse_reply(cfg, msg.get("message"))
+            if parsed:
+                on_reply(*parsed)
+    return since
+
+
+class PhoneRelay:
+    def __init__(self, pending):
+        self.pending = pending
+        self.pushed = {}            # req_id -> config used to push it
+        self.lock = threading.Lock()
+
+    def schedule(self, req):
+        cfg = load_phone()
+        if not cfg or not cfg.get("enabled") or os.environ.get("LOGGDIN_NO_PHONE"):
+            return None
+        t = threading.Timer(cfg["pushAfter"] if cfg["mode"] == "auto" else 0, self._push, args=(req["id"],))
+        t.daemon = True
+        t.start()
+        return t
+
+    def _push(self, req_id):
+        req = next((r for r in self.pending.all() if r["id"] == req_id), None)
+        cfg = load_phone()
+        if not req or not cfg or not cfg.get("enabled"):
+            return
+        ok, err = phone_publish(cfg, req)
+        app_ok, app_err = phone_app_notify(cfg, req)
+        if not app_ok:
+            log(f"phone: app notification failed ({app_err})")
+        if ok:
+            with self.lock:
+                self.pushed[req_id] = cfg
+            log(f"phone: pushed {req_id[:8]}")
+        else:
+            log(f"phone: push failed ({err})")
+
+    def finished(self, req_id, timer):
+        if timer:
+            timer.cancel()
+        with self.lock:
+            cfg = self.pushed.pop(req_id, None)
+        if cfg:
+            threading.Thread(target=phone_clear, args=(cfg, req_id), daemon=True).start()
+
+    def on_reply(self, req_id, decision):
+        if self.pending.resolve(dict(decision, via="phone"), req_id):
+            log(f"phone: {decision.get('type')} {req_id[:8]}")
+
+    def run(self):
+        def loop():
+            since, key, delay = None, None, 2
+            while True:
+                cfg = load_phone()
+                if not cfg or not cfg.get("enabled") or os.environ.get("LOGGDIN_NO_PHONE"):
+                    since, key = None, None
+                    time.sleep(2)
+                    continue
+                if (cfg["server"], cfg["topic"], cfg["secret"]) != key:
+                    since, key = None, (cfg["server"], cfg["topic"], cfg["secret"])
+                current = key
+                changed = lambda: (lambda c: not c or not c.get("enabled") or
+                                   (c["server"], c["topic"], c["secret"]) != current)(load_phone())
+                try:
+                    since = phone_listen(cfg, self.on_reply, changed, since) or since
+                    delay = 2
+                except Exception as e:
+                    log(f"phone: listener reconnecting ({e})")
+                    time.sleep(delay)
+                    delay = min(delay * 2, 60)
+        threading.Thread(target=loop, daemon=True, name="loggdin-phone").start()
+
+
 class Daemon:
     def __init__(self, port):
         self.port = port
         self.token = load_or_create_token()
         self.store = Store()
         self.pending = Pending()
+        self.phone = PhoneRelay(self.pending)
         self.started = time.time()
         self.last_event = None
         self.httpd = None
@@ -586,9 +907,11 @@ class Daemon:
         ev, holder = self.pending.add(req)
         log(f"ASK [{req['risk']}] {req['requestedBy']}: {req['command'][:120]}")
         notify(req)
+        push_timer = self.phone.schedule(req)
         timeout = float(body.get("timeout") or ASK_TIMEOUT)
         ev.wait(timeout=max(1.0, min(timeout, 3600.0)))
         self.pending.remove(req["id"])
+        self.phone.finished(req["id"], push_timer)
         decision = holder.get("decision") or {"type": "timeout"}
         self.store.remember(req, decision)
         self.store.audit(req, decision, False)
@@ -832,6 +1155,7 @@ class Daemon:
             return 1
         save_port(self.port)
         self.serve_unix()
+        self.phone.run()
         log(f"loggdin {VERSION} listening on http://127.0.0.1:{self.port}  (state: {state_dir()})")
         try:
             self.httpd.serve_forever(poll_interval=0.5)
@@ -1314,6 +1638,93 @@ def doctor():
     return 0 if ok else 1
 
 
+def cmd_phone(argv):
+    sub = (argv[:1] or ["status"])[0]
+    cfg = load_phone()
+    if sub == "setup":
+        server = argv[argv.index("--server") + 1] if "--server" in argv else None
+        if cfg and "--new" not in argv:
+            cfg["enabled"] = True
+            if server:
+                cfg["server"] = server.rstrip("/")
+        else:
+            cfg = new_phone_config(server)
+        save_phone(cfg)
+        print("📱 Phone approvals are ON.\n")
+        code = phone_pairing_code(cfg)
+        target = code if cfg["server"] == PHONE_DEFAULT_SERVER else f"{cfg['server']}/{code}"
+        print("1. Install loggdin Pocket on your phone, or open https://app.loggdin.com")
+        print("2. Type this pairing code in it (or open the link on your phone):")
+        print(f"\n       {code}\n       https://app.loggdin.com/#{target}\n")
+        print("   Treat the code like a password. Requests are encrypted with it end to end,")
+        print("   so the relay and anyone who only knows the topic can't read or answer them.")
+        print("3. Run 'loggdin phone test' and answer on your phone.\n")
+        print(f"Requests left unanswered at the computer for {int(cfg['pushAfter'])} s are sent to your phone.")
+        print("The phone offers Allow once, Allow 10 min (not for high risk) and Deny. 'Always' stays on the computer.")
+        return 0
+    if not cfg:
+        print("Phone approvals are not set up. Run: loggdin phone setup")
+        return 1 if sub != "status" else 0
+    if sub in ("on", "off"):
+        cfg["enabled"] = sub == "on"
+        save_phone(cfg)
+        print(f"📱 Phone approvals {'ON' if cfg['enabled'] else 'OFF'}.")
+        return 0
+    if sub == "delay":
+        try:
+            cfg["pushAfter"] = max(0, min(int(argv[1]), 100))
+        except (IndexError, ValueError):
+            print("usage: loggdin phone delay <seconds 0-100>", file=sys.stderr)
+            return 2
+        save_phone(cfg)
+        print(f"Unanswered requests go to your phone after {cfg['pushAfter']} s.")
+        return 0
+    if sub == "details":
+        level = (argv[1:2] or [""])[0]
+        if level not in ("full", "minimal"):
+            print("usage: loggdin phone details <full|minimal>", file=sys.stderr)
+            return 2
+        cfg["details"] = level
+        save_phone(cfg)
+        print("The phone shows " + ("the command and folder." if level == "full" else "only the agent, risk and folder."))
+        return 0
+    if sub == "test":
+        req = {"id": "TEST-" + secrets.token_hex(4).upper(), "requestedBy": "loggdin test", "risk": "low",
+               "command": "echo 'Hello from loggdin'", "directory": os.getcwd(), "secretWarnings": []}
+        ok, err = phone_publish(cfg, req)
+        if not ok:
+            print(f"❌ Could not reach {cfg['server']}: {err}")
+            return 1
+        print("📨 Sent a test notification. Tap a button on your phone (waiting 90 s)…")
+        got, deadline = {}, time.time() + 90
+
+        def on_reply(req_id, decision):
+            if req_id == req["id"]:
+                got["d"] = decision
+
+        since = int(time.time()) - 5
+        while not got and time.time() < deadline:
+            try:
+                since = phone_listen(cfg, on_reply, lambda: bool(got) or time.time() > deadline, since)
+            except Exception:
+                time.sleep(1)
+        phone_clear(cfg, req["id"])
+        if not got:
+            print("⌛ No answer. Check that loggdin Pocket is open and paired with the code from 'loggdin phone setup'.")
+            return 1
+        d = got["d"]
+        print("✓ Phone works: you tapped " + ("Allow." if d.get("type") == "allow" else "Deny."))
+        return 0
+    if sub == "status":
+        print(f"📱 Phone approvals: {'ON' if cfg.get('enabled') else 'OFF'}")
+        print(f"   server:  {cfg['server']}\n   topic:   {cfg['topic']}")
+        print(f"   delay:   {int(cfg['pushAfter'])} s\n   details: {cfg['details']}")
+        return 0
+    print("usage: loggdin phone <setup [--new] [--server URL]|test|on|off|status|delay N|details full|minimal>",
+          file=sys.stderr)
+    return 2
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     cmd = argv.pop(0) if argv else "help"
@@ -1405,6 +1816,8 @@ def main(argv=None):
         return 0
     if cmd == "run":
         return cmd_run(argv)
+    if cmd == "phone":
+        return cmd_phone(argv)
     if cmd == "doctor":
         return doctor()
     if cmd in ("version", "--version", "-V"):

@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         SentinelManager.shared.startup()
+        _ = PhoneRelay.shared   // start listening for phone replies if phone approvals are on
         // Dashboard is NOT opened automatically; user can open it from the menu bar if desired.
 
         // Automatically suppress and close any default SwiftUI window created on startup
@@ -71,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case "dashboard":
             Task { @MainActor in
-                SentinelManager.shared.openDashboard()
+                let section = queryItems.first(where: { $0.name == "section" })?.value?.lowercased()
+                SentinelManager.shared.openDashboard(section: section == "phone" ? "phone" : nil)
             }
         case "sound":
             if let name = queryItems.first(where: { $0.name == "name" })?.value {
