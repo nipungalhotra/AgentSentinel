@@ -57,6 +57,13 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 - High-risk operations (e.g., modifying files outside the workspace or executing destructive commands) highlight the card in warm amber/red.
 - Complete the action seamlessly by touching the Touch ID sensor or holding the confirm button for 1 second.
 
+### 📱 5. Approve From Your Phone
+- Away from your desk? Pending requests show up in **loggdin Pocket** on your iPhone or Android phone (or at app.loggdin.com; source in `mobile/`), with **Allow once**, **Allow 10 min** and **Deny**. No account to create.
+- **Mac:** Dashboard → *Rules & Grants* → *Approve from your phone* (or open `loggdin://dashboard?section=phone`) → switch it on and scan the QR code with your phone's camera. It opens loggdin Pocket already paired. Can't scan? Type the pairing code shown under the QR code. The Mac pushes right away when the screen is locked or you have been idle for a minute. Otherwise it pushes when the card goes unanswered for the delay you pick (15 s by default). While phone approvals are on, the card waits up to 110 s so you have time to answer from the phone. *Ask on* picks where a request appears: **Mac first, then phone** (the default), **Mac and phone together**, or **Phone only** (no card on the Mac; high-risk requests and any request that can't reach the phone still show the card).
+- **Windows / Linux:** `loggdin phone setup` prints a pairing code and link for loggdin Pocket; then `loggdin phone test`.
+- **Security:** outbound only: your computer publishes to a secret, random topic and listens on a matching reply topic, so no port is opened to the internet. Requests and their answer buttons are **encrypted end to end** with the pairing key, which only the QR code or pairing code carries, so the relay and anyone who learns the topic see only ciphertext. Only a phone holding the pairing key can register for notifications. Every answer carries a one-time HMAC-SHA256 signature tied to that single request, so a forged or replayed answer is ignored. "Always allow" and "all folders" are never offered on the phone, and high-risk requests get only Allow once / Deny. Commands flagged as containing a secret are never sent. Choose *Hide commands on the phone* (`loggdin phone details minimal`) to send only the agent, risk and folder. The audit log marks phone decisions with `"via": "phone"` (Mac: a Phone badge and a Via column in the CSV export).
+- **Relay:** messages pass through ntfy.sh by default, as ciphertext only. Lock-screen notifications from the installed app go through Expo's push service and carry only the agent, risk and folder. To use your own relay: `loggdin phone setup --server https://ntfy.example.com`, or edit `server` in `phone.json`. ntfy.sh allows about 250 messages a day per IP on the free tier.
+
 ---
 
 ## 📦 Installation & Packaging
@@ -199,6 +206,7 @@ curl http://localhost:9191/audit/verify
 | `loggdin install <agent\|all>` | Install native hooks across Claude Code, Antigravity, Cursor, Codex, or all. |
 | `loggdin uninstall <agent\|all>` | Cleanly remove hooks and restore original configuration files. |
 | `loggdin test <agent>` | Trigger a live demo permission prompt on your screen. |
+| `loggdin phone setup\|test\|on\|off\|status` | Pair loggdin Pocket and answer from your phone (end-to-end encrypted). `delay <s>` and `details <full\|minimal>` tune it. |
 
 ---
 

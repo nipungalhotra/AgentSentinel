@@ -469,6 +469,8 @@ struct AuditLogEntry: Identifiable, Codable {
     let autoAllowed: Bool
     var prevHash: String? = nil
     var entryHash: String? = nil
+    /// Where the answer came from when it was not the card on this Mac ("phone"); nil otherwise.
+    var via: String? = nil
 
     init(
         id: UUID = UUID(),
@@ -477,7 +479,8 @@ struct AuditLogEntry: Identifiable, Codable {
         decision: Decision,
         autoAllowed: Bool,
         prevHash: String? = nil,
-        entryHash: String? = nil
+        entryHash: String? = nil,
+        via: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -486,10 +489,11 @@ struct AuditLogEntry: Identifiable, Codable {
         self.autoAllowed = autoAllowed
         self.prevHash = prevHash
         self.entryHash = entryHash
+        self.via = via
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, request, decision, autoAllowed, prevHash, entryHash
+        case id, timestamp, request, decision, autoAllowed, prevHash, entryHash, via
     }
 
     init(from decoder: Decoder) throws {
@@ -501,10 +505,11 @@ struct AuditLogEntry: Identifiable, Codable {
         self.autoAllowed = try c.decodeIfPresent(Bool.self, forKey: .autoAllowed) ?? false
         self.prevHash = try c.decodeIfPresent(String.self, forKey: .prevHash)
         self.entryHash = try c.decodeIfPresent(String.self, forKey: .entryHash)
+        self.via = try c.decodeIfPresent(String.self, forKey: .via)
     }
 
     func computeHash(prev: String) -> String {
-        let payload = "\(prev)|\(Int(timestamp.timeIntervalSince1970))|\(request.plainCommand)|\(request.requestedBy)|\(request.directory)|\(request.risk.rawValue)|\(decision.summary)|\(autoAllowed)"
+        let payload = "\(prev)|\(Int(timestamp.timeIntervalSince1970))|\(request.plainCommand)|\(request.requestedBy)|\(request.directory)|\(request.risk.rawValue)|\(decision.summary)|\(autoAllowed)" + (via.map { "|via=\($0)" } ?? "")
         let digest = SHA256.hash(data: Data(payload.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }

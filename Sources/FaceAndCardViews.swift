@@ -324,7 +324,9 @@ final class PermissionModel {
     }
 
     var isHigh: Bool { request.risk == .high }
-    var timeout: Double { isHigh ? 60 : 45 }
+    /// With phone approvals on, the card waits long enough for an answer from the phone
+    /// (agents give a hook about 120 s; the hook socket waits 118 s).
+    var timeout: Double { PhoneRelay.shared.isActive ? 110 : (isHigh ? 60 : 45) }
     var baseFace: FaceState { (warn || isHigh) ? .worried : .idle }
 
     var titleText: String {
@@ -1086,6 +1088,11 @@ final class PermissionPopupController {
     private(set) var activeRequest: PermissionRequest?
     private var activeModel: PermissionModel?
 
+    func isStillAsking(requestId: String) -> Bool {
+        guard let model = activeModel, model.isAsking else { return false }
+        return model.request.id.uuidString.caseInsensitiveCompare(requestId) == .orderedSame
+    }
+
     func currentPendingRequest() -> PermissionRequest? {
         if let model = activeModel, model.isAsking {
             return model.request
@@ -1217,12 +1224,48 @@ final class PermissionPopupController {
             ?? NSScreen.main
             ?? NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
             ?? NSScreen.screens.first else {
+            // Lid closed / display asleep: nobody can answer on this Mac, but the phone still can.
+            if PhoneRelay.shared.isActive {
+                model.onFinish = headlessFinish(request, completion)
+                model.start()
+                PhoneRelay.shared.requestPresented(request, forceNow: true)
+                return
+            }
             self.activeRequest = nil
             self.activeModel = nil
             completion(.timeout)
             return
         }
 
+        // "Phone only" mode: ask on the phone and keep the Mac quiet. High-risk requests still show
+        // the card (they need Touch ID here), and so does any request whose push fails.
+        if PhoneRelay.shared.isPhoneOnly && request.risk != .high {
+            model.onFinish = headlessFinish(request, completion)
+            model.start()
+            Task { @MainActor [weak self] in
+                if await PhoneRelay.shared.pushNow(request) { return }
+                guard let self, self.activeModel === model, model.isAsking else { return }
+                self.showCard(model, request: request, screen: screen, notifyPhone: false, completion: completion)
+            }
+            return
+        }
+
+        showCard(model, request: request, screen: screen, notifyPhone: true, completion: completion)
+    }
+
+    /// Finish handler for a request that has no card on screen (phone only, or no display).
+    private func headlessFinish(_ request: PermissionRequest, _ completion: @escaping (Decision) -> Void) -> (Decision) -> Void {
+        { [weak self] decision in
+            self?.activeRequest = nil
+            self?.activeModel = nil
+            self?.activeCommand = nil
+            PhoneRelay.shared.requestFinished(request)
+            completion(decision)
+        }
+    }
+
+    private func showCard(_ model: PermissionModel, request: PermissionRequest, screen: NSScreen, notifyPhone: Bool,
+                          completion: @escaping (Decision) -> Void) {
         let geometry = IslandScreenGeometry(screen: screen)
         SoundEngine.shared.playPopup()
 
@@ -1238,6 +1281,7 @@ final class PermissionPopupController {
         panel.contentView = host
 
         model.onFinish = { [weak self] decision in
+            PhoneRelay.shared.requestFinished(request)
             if decision.isAllowed {
                 SoundEngine.shared.playAllow()
             } else {
@@ -1270,5 +1314,6 @@ final class PermissionPopupController {
         panel.makeKeyAndOrderFront(nil)
         
         model.start()
+        if notifyPhone { PhoneRelay.shared.requestPresented(request) }
     }
 }

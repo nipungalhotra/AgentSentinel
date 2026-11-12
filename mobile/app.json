@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "loggdin Pocket",
+    "slug": "loggdin",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.loggdin.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.loggdin.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single",
+      "name": "loggdin Pocket",
+      "shortName": "Pocket",
+      "themeColor": "#e8e5de",
+      "backgroundColor": "#e8e5de",
+      "description": "Approve your AI coding agents from your phone."
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "loggdin uses the camera to scan the pairing QR code shown on your Mac.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-notifications",
+      "expo-font"
+    ],
+    "backgroundColor": "#e8e5de"
+  }
+}

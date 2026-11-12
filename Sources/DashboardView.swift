@@ -22,10 +22,17 @@ struct DashboardView: View {
         }
     }
 
-    @UIState private var selectedTab: Tab = .overview
+    @UIState private var selectedTab: Tab
+    /// Opened with `loggdin://dashboard?section=phone`: show the phone approvals card straight away.
+    private let focusPhone: Bool
     @UIState private var manager = SentinelManager.shared
     @UIState private var rules = RulesEngine.shared
     @UIState private var socketCopied = false
+
+    init(initialTab: Tab = .overview, focusPhone: Bool = false) {
+        _selectedTab = UIState(wrappedValue: initialTab)
+        self.focusPhone = focusPhone
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -353,7 +360,7 @@ struct DashboardView: View {
                         case .audit:
                             AuditLogTab()
                         case .rules:
-                            RulesTab()
+                            RulesTab(focusPhone: focusPhone)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1415,7 +1422,7 @@ struct AuditLogTab: View {
 
                             Spacer()
 
-                            decisionBadge(entry.decision, auto: entry.autoAllowed)
+                            decisionBadge(entry.decision, auto: entry.autoAllowed, via: entry.via)
 
                             Text(entry.timeFormatted)
                                 .font(.system(size: 11, design: .monospaced))
@@ -1532,8 +1539,17 @@ struct AuditLogTab: View {
         }
     }
 
-    private func decisionBadge(_ decision: Decision, auto: Bool) -> some View {
+    private func decisionBadge(_ decision: Decision, auto: Bool, via: String? = nil) -> some View {
         HStack(spacing: 4) {
+            if via == "phone" {
+                Label("Phone", systemImage: "iphone")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Answered from phone")
+            }
             if auto {
                 Text("AUTO")
                     .font(.system(size: 9, weight: .black, design: .monospaced))
@@ -1555,11 +1571,13 @@ struct AuditLogTab: View {
 // MARK: - Rules & Grants Tab
 
 struct RulesTab: View {
+    var focusPhone: Bool = false
     @UIState private var rules = RulesEngine.shared
     @UIState private var newRulePattern: String = ""
     @UIState private var testResult: String? = nil
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 // Active 10-Minute Temporary Grants
@@ -1692,6 +1710,9 @@ struct RulesTab: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
 
+                PhoneApprovalsCard()
+                    .id("phone-approvals")
+
                 // Remote Webhook Alerts Relay
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -1757,6 +1778,193 @@ struct RulesTab: View {
             }
             .padding(24)
         }
+        .onAppear {
+            guard focusPhone else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { proxy.scrollTo("phone-approvals", anchor: .top) }
+        }
+        }
     }
 }
 
+// MARK: - Phone approvals (ntfy)
+
+struct PhoneApprovalsCard: View {
+    @State private var config: PhoneConfig? = PhoneRelay.shared.config
+    @State private var status: String?
+    @State private var testing = false
+
+    private var subscribeURL: String? {
+        guard let c = config else { return nil }
+        return PhoneRelay.pairingLink(c)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Approve from your phone")
+                        .font(.system(size: 16, weight: .bold))
+                    Text("When you are away from the Mac (screen locked, idle for a minute, or no answer within the delay), the request shows up in loggdin Pocket on your phone with Allow and Deny buttons, encrypted end to end. \"Always\" stays on the Mac.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Toggle("", isOn: Binding(
+                    get: { config?.enabled == true },
+                    set: { on in PhoneRelay.shared.setEnabled(on); refresh() }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityLabel("Phone approvals")
+            }
+
+            if let c = config, c.enabled, let url = subscribeURL {
+                HStack(alignment: .top, spacing: 18) {
+                    if let qr = Self.qrImage(url) {
+                        Image(nsImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .frame(width: 132, height: 132)
+                            .padding(8)
+                            .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .accessibilityLabel("QR code that opens loggdin Pocket, connected to this Mac")
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("1. Scan the code with your phone's camera. It opens loggdin Pocket, already connected.")
+                        Text("2. Can't scan? Type this pairing code in loggdin Pocket:")
+                        HStack(spacing: 8) {
+                            Text(PhoneRelay.pairingCode(c))
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .textSelection(.enabled)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(PhoneRelay.pairingCode(c), forType: .string)
+                                status = "Pairing code copied."
+                            }
+                            .controlSize(.small)
+                        }
+                        Text("Requests are encrypted end to end with this code, so the relay can't read or answer them.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if c.serverURL != PhoneRelay.defaultServer {
+                            Text("Server: \(c.serverURL)").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        }
+                        Text("3. Send a test and tap Allow on your phone.")
+                        Text("Keep the pairing code private: it is the key to your requests.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 12.5))
+                }
+
+                HStack(spacing: 14) {
+                    Picker("Ask on", selection: Binding(
+                        get: { c.mode },
+                        set: { v in PhoneRelay.shared.update { $0.mode = v }; refresh() })) {
+                        Text("Mac first, then phone").tag("auto")
+                        Text("Mac and phone together").tag("both")
+                        Text("Phone only").tag("phone")
+                    }
+                    .frame(width: 280)
+                    Text(c.mode == "phone" ? "No card on the Mac. High-risk requests, and any request that can't reach the phone, still show the card."
+                         : c.mode == "both" ? "The card and the phone notification appear at the same time."
+                         : "The phone gets the request when the Mac is locked or idle, or after the delay.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.system(size: 12.5))
+
+                HStack(spacing: 14) {
+                    Picker("Send after", selection: Binding(
+                        get: { Int(c.pushAfter) },
+                        set: { v in PhoneRelay.shared.update { $0.pushAfter = Double(v) }; refresh() })) {
+                        Text("Right away").tag(0)
+                        Text("10 s").tag(10)
+                        Text("15 s").tag(15)
+                        Text("30 s").tag(30)
+                    }
+                    .frame(width: 190)
+                    .disabled(c.mode != "auto")
+                    Toggle("Hide commands on the phone", isOn: Binding(
+                        get: { c.details == "minimal" },
+                        set: { v in PhoneRelay.shared.update { $0.details = v ? "minimal" : "full" }; refresh() }))
+                        .toggleStyle(.checkbox)
+                }
+                .font(.system(size: 12.5))
+
+                if !c.pushTokens.isEmpty {
+                    HStack(spacing: 10) {
+                        Text(c.pushTokens.count == 1 ? "1 phone gets loggdin app notifications."
+                             : "\(c.pushTokens.count) phones get loggdin app notifications.")
+                            .font(.system(size: 12.5))
+                        Button("Forget Phones") {
+                            PhoneRelay.shared.update { $0.pushTokens = [] }
+                            refresh()
+                            status = "Phones forgotten. Open the loggdin app on a phone to add it again."
+                        }
+                        .controlSize(.small)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button(testing ? "Waiting for your phone…" : "Send Test") { test() }
+                        .disabled(testing)
+                        .controlSize(.small)
+                    Button("New Topic") {
+                        PhoneRelay.shared.setUp(newTopic: true)
+                        refresh()
+                        status = "New topic created. Subscribe to it on your phone again."
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                    if let status {
+                        Text(status)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8))
+        .onAppear { refresh() }
+    }
+
+    private func refresh() {
+        config = PhoneRelay.shared.config
+    }
+
+    private func test() {
+        testing = true
+        status = "Sent. Tap a button on your phone."
+        Task {
+            let err = await PhoneRelay.shared.sendTest { decision in
+                testing = false
+                switch decision {
+                case .allow: status = "Phone works: you tapped Allow."; SoundEngine.shared.playAllow()
+                case .deny: status = "Phone works: you tapped Deny."; SoundEngine.shared.playAllow()
+                case .timeout: status = "No answer in 90 s. Check the ntfy subscription."; SoundEngine.shared.playDeny()
+                }
+            }
+            if let err {
+                testing = false
+                status = err
+                SoundEngine.shared.playDeny()
+            }
+        }
+    }
+
+    static func qrImage(_ text: String) -> NSImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
+        let rep = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
+    }
+}
