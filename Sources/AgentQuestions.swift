@@ -164,8 +164,9 @@ final class QuestionController {
         host.sizingOptions = []
         panel.contentView = host
         panel.level = .modalPanel
+        // Not made key: a question must never be answered by keys typed into another app. Clicking the
+        // card focuses it, and then 1-4, Return and Esc work.
         panel.orderFrontRegardless()
-        panel.makeKeyAndOrderFront(nil)
         self.panel = panel
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) { model.appeared = true }
@@ -293,7 +294,6 @@ struct QuestionCard: View {
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
         .onKeyPress { press in
             guard let n = Int(press.characters), n >= 1, n <= item.options.count else { return .ignored }
             model.choose(n - 1)
