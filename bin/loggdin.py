@@ -1962,7 +1962,7 @@ class ApprovalCard:
     HOLD_SECONDS = 1.0
     ARM_DELAY = 0.6        # ignore keys at first, so typing in another window can't answer
 
-    def __init__(self, root, port=None, token=None, autostart=True):
+    def __init__(self, root, port=None, token=None, autostart=True, user_window=None):
         import tkinter as tk
         import tkinter.font as tkfont
         self.root, self.port, self.tok = root, port, token
@@ -1993,6 +1993,8 @@ class ApprovalCard:
         self.req, self.queue, self.done = None, [], []
         self.scope_i, self.details, self.copied, self.resolved = 0, False, False, None
         self.hold_start, self.armed_at, self.fails, self.visible = None, 0.0, 0, False
+        self.clicked = False
+        self.user_window = user_window
         self.ring = self.hold_bar = None
         self.W, self.H = self.px(self.WIDTH), self.px(200)
 
@@ -2007,6 +2009,7 @@ class ApprovalCard:
         root.configure(bg=bg)
         self.c = tk.Canvas(root, highlightthickness=0, bd=0, bg=bg)
         self.c.pack(fill="both", expand=True)
+        self.c.bind("<Button-1>", self.focus_on_click, add="+")
         for key, fn in (("<Return>", lambda e: self.key_allow()), ("<KP_Enter>", lambda e: self.key_allow()),
                         ("<Escape>", lambda e: self.key_escape()),
                         ("<Left>", lambda e: self.step_scope(-1)), ("<Right>", lambda e: self.step_scope(1)),
@@ -2108,17 +2111,85 @@ class ApprovalCard:
             self.top = self.px(8)
             root.attributes("-alpha", 0.0)
             root.geometry(f"{self.W}x{self.H}+{x}+{self.top - self.px(14)}")
+            self.set_no_activate(True)
+            self.clicked = False
+            prev = self._foreground()
+            if IS_WINDOWS and prev == self._hwnd():
+                prev = self.user_window       # we hold the foreground already (see run_popup)
             root.deiconify()
+            self.set_no_activate(True)    # again: the outer window only exists now
+            # Tk's first show uses an activating ShowWindow, so a new card process still grabs the
+            # foreground a moment later. Watch briefly and hand it straight back unless you clicked.
+            self._guard_foreground(prev, 12)
             root.lift()
             root.attributes("-topmost", True)
-            # Questions and notices don't take keyboard focus until clicked, so stray key presses
-            # in another window can't answer them (same as the Mac card).
-            if self.kind == "permission":
-                try:
-                    root.focus_force()
-                except Exception:
-                    pass
+            # No card takes keyboard focus on its own: an Enter meant for another window must never
+            # approve a request. Clicking the card gives it the keyboard (see focus_on_click).
             self.animate_in(0)
+
+    def focus_on_click(self, _event=None):
+        """A click on the card is a deliberate choice: from then on its keys (Enter, Esc, ...) work."""
+        self.clicked = True
+        self.set_no_activate(False)
+        try:
+            self.root.focus_force()
+            if IS_WINDOWS:
+                import ctypes
+                ctypes.windll.user32.SetForegroundWindow(self._hwnd())
+        except Exception:
+            pass
+
+    def _hwnd(self):
+        """The card's top-level window. Tk only creates its outer wrapper window when the card is
+        first shown, so look it up each time (GetAncestor GA_ROOT) instead of caching wm_frame."""
+        import ctypes
+        return ctypes.windll.user32.GetAncestor(self.root.winfo_id(), 2) or self.root.winfo_id()
+
+    def set_no_activate(self, on):
+        """Windows activates the first window a new process shows, whatever Tk asks for. Mark the
+        card WS_EX_NOACTIVATE (and a tool window, so it stays out of the taskbar / Alt-Tab) so it can
+        never take the foreground, and with it your key presses, until you click it."""
+        if not IS_WINDOWS:
+            return
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            u32.GetWindowLongW.restype = ctypes.c_long
+            hwnd = self._hwnd()
+            ex = u32.GetWindowLongW(hwnd, -20)                      # GWL_EXSTYLE
+            ex = (ex | 0x08000000 | 0x80) if on else (ex & ~0x08000000)   # NOACTIVATE | TOOLWINDOW
+            u32.SetWindowLongW(hwnd, -20, ex)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _foreground():
+        if not IS_WINDOWS:
+            return None
+        try:
+            import ctypes
+            return ctypes.windll.user32.GetForegroundWindow()
+        except Exception:
+            return None
+
+    def _guard_foreground(self, prev, tries):
+        if not IS_WINDOWS or not prev or tries <= 0 or self.clicked or not self.visible:
+            return
+        try:
+            me = self._hwnd()
+        except Exception:
+            return
+        if self._foreground() == me:
+            self._restore_foreground(prev)
+        self.root.after(40, lambda: self._guard_foreground(prev, tries - 1))
+
+    @staticmethod
+    def _restore_foreground(hwnd):
+        try:
+            import ctypes
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
 
     @property
     def kind(self):
@@ -2136,6 +2207,7 @@ class ApprovalCard:
     def hide(self):
         self.visible, self.req, self.resolved = False, None, None
         self.root.withdraw()
+        self.set_no_activate(True)      # the next card must not take the keyboard either
 
     # -- actions --
     def key_allow(self):
@@ -2645,13 +2717,26 @@ def run_popup(port):
                 ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
+    # Windows makes a new process's first window the foreground window, even Tk's hidden one, so
+    # from start-up your key presses would go to the (invisible) card. Remember your window and
+    # hand the foreground straight back.
+    user_window = ApprovalCard._foreground()
     try:
         import tkinter as tk
         root = tk.Tk()
     except Exception as e:
         log(f"popup: no GUI available ({e})")
         return 3
-    ApprovalCard(root, port, tok)
+    card = ApprovalCard(root, port, tok, user_window=user_window)
+    root.update_idletasks()
+    card.set_no_activate(True)
+    def settle(n):      # the activation can land a moment after start-up: keep checking for ~1 s
+        if user_window and not card.visible and ApprovalCard._foreground() == card._hwnd():
+            ApprovalCard._restore_foreground(user_window)
+        if n > 0:
+            root.after(100, lambda: settle(n - 1))
+    if IS_WINDOWS:
+        settle(10)
     root.mainloop()
     return 0
 

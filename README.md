@@ -118,7 +118,9 @@ Claude Code), and "waiting for you" alerts or other agents' questions show for a
 phone approvals on, single-choice questions get one button per option on your phone too.
 
 Try the card with `loggdin test` (or `loggdin test cursor` for a high-risk one); demo requests are
-never executed. Keys: Enter allows, Esc denies, ←/→ or Tab change the scope. The card follows the
+never executed. The card never takes the keyboard on its own, so an Enter typed in another window
+can't approve anything: click the card first, then Enter allows, Esc denies, ←/→ or Tab change the
+scope (or just click the buttons). The card follows the
 Windows light/dark app theme; set `LOGGDIN_THEME=light|dark` to override, or `LOGGDIN_POPUP=0` to
 turn it off and use notifications only.
 

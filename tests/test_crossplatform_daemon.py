@@ -367,6 +367,21 @@ class CrossPlatformDaemonTest(unittest.TestCase):
             self.assertEqual(posted[-1], {"requestId": "A", "decision": "allow", "scope": "always"})
             card.after_resolved()
             self.assertFalse(card.visible)
+            # No card grabs the keyboard when it appears (an Enter meant for another window must
+            # not approve anything); clicking the card does give it the keyboard.
+            grabs = []
+            root.focus_force = lambda: grabs.append(1)
+            for kind_req in (dict(req, id="P2"), dict(req, id="Q2", kind="question", questions=[
+                    {"question": "q?", "header": "", "multiSelect": False, "options": [{"label": "a", "description": ""}]}]),
+                    dict(req, id="N2", kind="notice", message="m")):
+                card.hide()
+                card.queue = [kind_req]
+                card.show(kind_req)
+                root.update()
+            self.assertEqual(grabs, [], "no card takes keyboard focus on its own")
+            card.focus_on_click()
+            self.assertEqual(grabs, [1], "clicking the card gives it the keyboard")
+            card.hide()
             high = dict(req, id="H", risk="high")
             card.queue = [high]
             card.show(high)
