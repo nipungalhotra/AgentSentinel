@@ -81,6 +81,52 @@ jobs:
           if-no-files-found: error
 
 
+  pocket:
+    name: loggdin Pocket (typecheck, lint, web build, protocol vectors)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and lint
+        run: |
+          npx tsc --noEmit
+          npx eslint App.tsx src
+
+      - name: Phone and computer agree on signing and encryption
+        working-directory: .
+        run: |
+          python3 - > /tmp/vec.txt <<'PY'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("lg", "bin/loggdin.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          cfg = {"topic": "loggdin-abcdefgh2345", "secret": "s3cret"}
+          print(m.phone_pair_key("s3cret")); print(m.phone_seal(cfg, {"t": "T", "m": "npm install express", "h": False, "a": [["Deny", "lg1 X deny 0"]]}))
+          PY
+          cd mobile && node --experimental-strip-types -e "
+          const [k, s] = require('fs').readFileSync('/tmp/vec.txt', 'utf8').trim().split('\\n');
+          import('./src/hmac.ts').then((m) => {
+            const o = m.openSealed(k, s);
+            if (!o || o.m !== 'npm install express') throw new Error('phone could not open a request sealed by the computer');
+            if (m.openSealed('0000000000000000', s) !== null) throw new Error('wrong key opened a request');
+            console.log('ok: sealed request opens only with the pairing key');
+          });"
+
+      - name: Web build (app.loggdin.com)
+        run: npx expo export --platform web
+
   portable:
     name: Portable daemon (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
