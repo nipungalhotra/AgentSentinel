@@ -44,6 +44,7 @@ class FakeNtfy:
     def __init__(self):
         self.published = []          # JSON publishes (notifications)
         self.cleared = []
+        self.posts = []              # (path, body) of every non-root POST (replies, app notifications)
         self.subs = {}               # topic -> [queue]
         self.lock = threading.Lock()
         fake = self
@@ -68,6 +69,7 @@ class FakeNtfy:
                 if not path:
                     fake.published.append(json.loads(raw))
                 else:
+                    fake.posts.append((path, raw.decode()))
                     fake.deliver(path, raw.decode())
                 self._ok()
 
@@ -107,9 +109,10 @@ class FakeNtfy:
         for q in qs:
             q.put({"event": "message", "id": f"m{time.time_ns()}", "message": text})
 
-    def tap(self, notification, label):
-        action = next(a for a in notification["actions"] if a["label"] == label)
-        req = urllib.request.Request(action["url"], data=action["body"].encode(), method=action.get("method", "POST"))
+    def tap(self, opened, label, cfg):
+        """What loggdin Pocket sends when a button is tapped: the signed body, to the reply topic."""
+        body = next(b for l, b in opened["a"] if l == label)
+        req = urllib.request.Request(f"{self.url}/{cfg['topic']}-reply", data=body.encode(), method="POST")
         urllib.request.urlopen(req, timeout=5).read()
 
     def wait_published(self, count, timeout=10):
@@ -147,9 +150,41 @@ class PhoneProtocolTest(unittest.TestCase):
                      f"lg1 REQ-1 always {sig}", "", "hello", f"lg2 REQ-1 deny {sig}"):
             self.assertIsNone(self.m.phone_parse_reply(self.cfg, text), text)
 
+    def test_sealed_messages_open_only_with_the_right_key_and_untampered(self):
+        sealed = self.m.phone_seal(self.cfg, {"t": "x", "m": "rm -rf build", "a": [["Deny", "lg1 A deny 0"]]})
+        self.assertTrue(sealed.startswith("lg1e "))
+        self.assertNotIn("rm -rf", sealed)
+        self.assertEqual(self.m.phone_open(self.cfg, sealed)["m"], "rm -rf build")
+        other = dict(self.cfg, secret="another-secret")
+        self.assertIsNone(self.m.phone_open(other, sealed))
+        import base64
+        raw = bytearray(base64.b64decode(sealed[5:]))
+        raw[20] ^= 1
+        self.assertIsNone(self.m.phone_open(self.cfg, "lg1e " + base64.b64encode(bytes(raw)).decode()))
+        self.assertIsNone(self.m.phone_open(self.cfg, "hello"))
+        self.assertNotEqual(sealed, self.m.phone_seal(self.cfg, {"t": "x", "m": "rm -rf build", "a": [["Deny", "lg1 A deny 0"]]}))
+
     def test_signature_matches_swift_vector(self):
         # Same vector is produced by Sources/PhoneRelay.swift (CryptoKit HMAC-SHA256, 32 hex chars).
         self.assertEqual(self.m.phone_sig("abc123secret", "BB3A26FF-8E69", "allow-10m"), "7ca1291cc8499d13512e776bfd55e813")
+
+    def test_push_registration_needs_the_pairing_key(self):
+        ok = "ExponentPushToken[abcdefghijklmnopqrstuv]"
+        secret = self.cfg["secret"]
+        key = self.m.phone_pair_key(secret)
+        self.assertEqual(len(key), 16)
+        sig = self.m.hmac.new(key.encode(), ("loggdin-phone|v1|push|" + ok).encode(), self.m.hashlib.sha256).hexdigest()[:32]
+        self.assertEqual(self.m.phone_parse_push_registration("lg1-push " + ok + " " + sig, secret), ok)
+        for bad in ("lg1-push " + ok, "lg1-push " + ok + " " + "0" * 32, "lg1-push https://evil.example/x " + sig,
+                    "lg1 " + ok + " " + sig, "lg1-push " + ok + " " + sig + " extra", None):
+            self.assertIsNone(self.m.phone_parse_push_registration(bad, secret))
+        self.assertIsNone(self.m.phone_parse_push_registration("lg1-push " + ok + " " + sig, "another-secret"))
+        self.assertEqual(self.m.phone_pairing_code(self.cfg), self.cfg["topic"] + "." + key)
+
+    def test_pair_key_matches_swift_and_typescript_vector(self):
+        # Same derivation as PhoneRelay.pairKey (Swift) and the phone's signPushRegistration (TypeScript).
+        self.assertEqual(self.m.phone_pair_key("s3cret"),
+                         self.m.hmac.new(b"s3cret", b"loggdin-phone|v1|pair", self.m.hashlib.sha256).hexdigest()[:16])
 
     def test_message_hides_secrets_and_minimal_mode(self):
         req = {"id": "X", "requestedBy": "Codex", "risk": "high", "command": "export KEY=sk-live-123",
@@ -171,12 +206,14 @@ class PhoneRelayEndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.ntfy = FakeNtfy()
+        cls.m = load_module()
         cls.tmp = tempfile.mkdtemp(prefix="lgq")
         cls.state = os.path.join(cls.tmp, "s")
         os.makedirs(cls.state)
         cls.port = free_port()
         cls.env = dict(os.environ, LOGGDIN_HOME=cls.state, LOGGDIN_PORT=str(cls.port), LOGGDIN_NO_NOTIFY="1",
-                       LOGGDIN_NO_UNIX="1", PYTHONIOENCODING="utf-8")
+                       LOGGDIN_NO_UNIX="1", PYTHONIOENCODING="utf-8",
+                       LOGGDIN_EXPO_PUSH_URL=cls.ntfy.url + "/expo-push")
         cls.env.pop("LOGGDIN_NO_PHONE", None)
         out = subprocess.run([sys.executable, DAEMON, "phone", "setup", "--server", cls.ntfy.url],
                              env=cls.env, capture_output=True, text=True)
@@ -226,8 +263,14 @@ class PhoneRelayEndToEndTest(unittest.TestCase):
         self.assertTrue(self.ntfy.wait_published(n0 + 1))
         note = self.ntfy.published[n0]
         self.assertEqual(note["topic"], self.cfg["topic"])
-        self.assertEqual([a["label"] for a in note["actions"]], ["Allow once", "Allow 10 min", "Deny"])
-        self.ntfy.tap(note, "Allow 10 min")
+        # Nothing readable reaches the relay: no command, no folder, no answer buttons.
+        raw = json.dumps(note)
+        for leak in ("npm install stripe", "shop", "Claude Code", "lg1 ", "actions"):
+            self.assertNotIn(leak, raw)
+        opened = self.m.phone_open(self.cfg, note["message"])
+        self.assertIn("npm install stripe", opened["m"])
+        self.assertEqual([l for l, _ in opened["a"]], ["Allow once", "Allow 10 min", "Deny"])
+        self.ntfy.tap(opened, "Allow 10 min", self.cfg)
         t.join(10)
         self.assertEqual(result.get("r"), {"allowed": True, "decision": "allow", "scope": "tenMinutes"})
         time.sleep(0.5)
@@ -236,15 +279,54 @@ class PhoneRelayEndToEndTest(unittest.TestCase):
             last = json.loads(f.read().strip().splitlines()[-1])
         self.assertEqual(last["decision"].get("via"), "phone")
 
+    def test_zz_phone_app_registers_and_gets_a_notification_without_the_command(self):
+        token = "ExponentPushToken[abcdefghijklmnopqrstuv]"
+        reply = self.cfg["topic"] + "-reply"
+        # what the loggdin phone app posts when notifications are switched on (plus one bogus token)
+        m = load_module()
+        key = m.phone_pair_key(self.cfg["secret"]).encode()
+        sig = m.hmac.new(key, ("loggdin-phone|v1|push|" + token).encode(), m.hashlib.sha256).hexdigest()[:32]
+        intruder = "ExponentPushToken[intruderintruderintr]"
+        self.ntfy.deliver(reply, "lg1-push not-a-token " + sig)
+        self.ntfy.deliver(reply, "lg1-push " + intruder)               # no signature: someone who only knows the topic
+        self.ntfy.deliver(reply, "lg1-push " + intruder + " " + sig)   # a signature for another token
+        self.ntfy.deliver(reply, "lg1-push " + token + " " + sig)
+        for _ in range(100):
+            with open(os.path.join(self.state, "phone.json")) as f:
+                if json.load(f).get("pushTokens") == [token]:
+                    break
+            time.sleep(0.05)
+        else:
+            self.fail("push token was not stored")
+        n0 = len(self.ntfy.published)
+        t, result = self.ask_async({"requestedBy": "Claude Code", "risk": "medium",
+                                    "command": "npm install left-pad", "directory": "/tmp/shop", "timeout": 30})
+        self.assertTrue(self.ntfy.wait_published(n0 + 1))
+        for _ in range(100):
+            sent = [json.loads(b) for p, b in self.ntfy.posts if p == "expo-push"]
+            if sent:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("no app notification was sent")
+        note = sent[-1][0]
+        self.assertEqual(note["to"], token)
+        self.assertIn("Claude Code needs permission", note["title"])
+        self.assertNotIn("left-pad", json.dumps(sent[-1]))      # the command stays off Expo's servers
+        self.ntfy.tap(self.m.phone_open(self.cfg, self.ntfy.published[n0]["message"]), "Deny", self.cfg)
+        t.join(10)
+        self.assertEqual(result.get("r", {}).get("decision"), "deny")
+
     def test_high_risk_has_no_10_minute_button_and_deny_works(self):
         n0 = len(self.ntfy.published)
         t, result = self.ask_async({"requestedBy": "Codex", "risk": "high",
                                     "command": "git push --force origin main", "directory": "/tmp/repo", "timeout": 30})
         self.assertTrue(self.ntfy.wait_published(n0 + 1))
         note = self.ntfy.published[n0]
-        self.assertEqual([a["label"] for a in note["actions"]], ["Allow once", "Deny"])
+        opened = self.m.phone_open(self.cfg, note["message"])
+        self.assertEqual([l for l, _ in opened["a"]], ["Allow once", "Deny"])
         self.assertEqual(note["priority"], 5)
-        self.ntfy.tap(note, "Deny")
+        self.ntfy.tap(opened, "Deny", self.cfg)
         t.join(10)
         self.assertEqual(result.get("r"), {"allowed": False, "decision": "deny"})
 
@@ -254,7 +336,7 @@ class PhoneRelayEndToEndTest(unittest.TestCase):
                                     "directory": "/tmp/site", "timeout": 4})
         self.assertTrue(self.ntfy.wait_published(n0 + 1))
         note = self.ntfy.published[n0]
-        req_id = note["actions"][0]["body"].split()[1]
+        req_id = self.m.phone_open(self.cfg, note["message"])["a"][0][1].split()[1]
         self.ntfy.deliver(self.cfg["topic"] + "-reply", f"lg1 {req_id} allow-once {'0' * 32}")
         t.join(10)
         self.assertEqual(result.get("r"), {"allowed": False, "decision": "timeout"})

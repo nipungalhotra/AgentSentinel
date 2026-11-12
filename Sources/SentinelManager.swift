@@ -75,7 +75,8 @@ final class SentinelManager: NSObject {
         WebhookManager.shared.notifyPending(activeRequest)
 
         let decision = await PermissionPopupController.shared.ask(activeRequest)
-        rulesEngine.recordDecision(request: activeRequest, decision: decision, autoAllowed: false)
+        let via = PhoneRelay.shared.takeAnsweredByPhone(activeRequest.id.uuidString) ? "phone" : nil
+        rulesEngine.recordDecision(request: activeRequest, decision: decision, autoAllowed: false, via: via)
         WebhookManager.shared.notifyDecision(activeRequest, decision: decision)
 
         // Production Feature: Time Machine File Snapshot before modifications
@@ -250,8 +251,11 @@ final class SentinelManager: NSObject {
         NSApplication.shared.terminate(nil)
     }
 
-    func openDashboard() {
+    /// `section: "phone"` opens straight at the phone approvals card (loggdin://dashboard?section=phone).
+    func openDashboard(section: String? = nil) {
+        let root: DashboardView = section == "phone" ? DashboardView(initialTab: .rules, focusPhone: true) : DashboardView()
         if let window = dashboardWindow {
+            if section != nil { window.contentView = NSHostingView(rootView: root) }
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -267,7 +271,7 @@ final class SentinelManager: NSObject {
         window.title = "loggdin Dashboard"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.contentView = NSHostingView(rootView: DashboardView())
+        window.contentView = NSHostingView(rootView: root)
         window.isReleasedWhenClosed = false
         self.dashboardWindow = window
         // When closed, release the SwiftUI tree so its animations (radar pulse, etc.) stop

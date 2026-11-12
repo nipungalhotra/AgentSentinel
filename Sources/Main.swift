@@ -72,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case "dashboard":
             Task { @MainActor in
-                SentinelManager.shared.openDashboard()
+                let section = queryItems.first(where: { $0.name == "section" })?.value?.lowercased()
+                SentinelManager.shared.openDashboard(section: section == "phone" ? "phone" : nil)
             }
         case "sound":
             if let name = queryItems.first(where: { $0.name == "name" })?.value {

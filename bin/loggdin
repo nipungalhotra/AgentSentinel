@@ -207,6 +207,7 @@ cmd_test() {
 
   curl -s -X POST "http://127.0.0.1:$PORT/ask" \
     -H "Content-Type: application/json" \
+    -H "X-Loggdin-Token: $(get_token)" \
     -d "{\"command\":\"$CMD\",\"title\":\"$TITLE\",\"subtitle\":\"$SUBTITLE\",\"risk\":\"$RISK\",\"requestedBy\":\"$AGENT\",\"symbol\":\"$SYM\",\"forcePrompt\":true}"
   echo ""
 }
@@ -348,7 +349,7 @@ cmd_sound() {
       -d "{\"sound\":\"$SOUND_NAME\"}")
     echo "🔔 Sound set to: $SOUND_NAME"
   else
-    curl -s "http://127.0.0.1:$PORT/sound"
+    curl -s -H "X-Loggdin-Token: $(get_token)" "http://127.0.0.1:$PORT/sound"
     echo ""
   fi
 }

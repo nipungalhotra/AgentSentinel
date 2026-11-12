@@ -256,7 +256,7 @@ final class RulesEngine {
 
     // MARK: - Recording
 
-    func recordDecision(request: PermissionRequest, decision: Decision, autoAllowed: Bool = false) {
+    func recordDecision(request: PermissionRequest, decision: Decision, autoAllowed: Bool = false, via: String? = nil) {
         if decision.isAllowed {
             recordRecentApproval(command: request.plainCommand, directory: request.directory)
         }
@@ -268,7 +268,8 @@ final class RulesEngine {
             decision: decision,
             autoAllowed: autoAllowed,
             prevHash: prev,
-            entryHash: nil
+            entryHash: nil,
+            via: via
         )
         entry.entryHash = entry.computeHash(prev: prev)
 
@@ -404,14 +405,14 @@ final class RulesEngine {
     // MARK: - Audit Export
 
     func exportAuditLogCSV() -> String {
-        var csv = "Timestamp,ISO8601,Agent,Risk,Command,Directory,ModifiesFiles,Decision,AutoAllowed,PrevHash,EntryHash\n"
+        var csv = "Timestamp,ISO8601,Agent,Risk,Command,Directory,ModifiesFiles,Decision,AutoAllowed,PrevHash,EntryHash,Via\n"
         let isoFormatter = ISO8601DateFormatter()
         for entry in auditLogs {
             let cleanCmd = entry.request.plainCommand.replacingOccurrences(of: "\"", with: "\"\"")
             let cleanDir = entry.request.directory.replacingOccurrences(of: "\"", with: "\"\"")
             let cleanMod = entry.request.modifiesFiles.replacingOccurrences(of: "\"", with: "\"\"")
             let cleanAgent = entry.request.requestedBy.replacingOccurrences(of: "\"", with: "\"\"")
-            let row = "\"\(entry.dateFormatted)\",\"\(isoFormatter.string(from: entry.timestamp))\",\"\(cleanAgent)\",\"\(entry.request.risk.rawValue)\",\"\(cleanCmd)\",\"\(cleanDir)\",\"\(cleanMod)\",\"\(entry.decision.summary)\",\(entry.autoAllowed),\"\(entry.prevHash ?? "")\",\"\(entry.entryHash ?? "")\"\n"
+            let row = "\"\(entry.dateFormatted)\",\"\(isoFormatter.string(from: entry.timestamp))\",\"\(cleanAgent)\",\"\(entry.request.risk.rawValue)\",\"\(cleanCmd)\",\"\(cleanDir)\",\"\(cleanMod)\",\"\(entry.decision.summary)\",\(entry.autoAllowed),\"\(entry.prevHash ?? "")\",\"\(entry.entryHash ?? "")\",\"\(entry.via ?? "computer")\"\n"
             csv.append(row)
         }
         return csv

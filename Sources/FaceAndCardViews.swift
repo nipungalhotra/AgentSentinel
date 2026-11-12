@@ -1226,13 +1226,7 @@ final class PermissionPopupController {
             ?? NSScreen.screens.first else {
             // Lid closed / display asleep: nobody can answer on this Mac, but the phone still can.
             if PhoneRelay.shared.isActive {
-                model.onFinish = { [weak self] decision in
-                    self?.activeRequest = nil
-                    self?.activeModel = nil
-                    self?.activeCommand = nil
-                    PhoneRelay.shared.requestFinished(request)
-                    completion(decision)
-                }
+                model.onFinish = headlessFinish(request, completion)
                 model.start()
                 PhoneRelay.shared.requestPresented(request, forceNow: true)
                 return
@@ -1243,6 +1237,35 @@ final class PermissionPopupController {
             return
         }
 
+        // "Phone only" mode: ask on the phone and keep the Mac quiet. High-risk requests still show
+        // the card (they need Touch ID here), and so does any request whose push fails.
+        if PhoneRelay.shared.isPhoneOnly && request.risk != .high {
+            model.onFinish = headlessFinish(request, completion)
+            model.start()
+            Task { @MainActor [weak self] in
+                if await PhoneRelay.shared.pushNow(request) { return }
+                guard let self, self.activeModel === model, model.isAsking else { return }
+                self.showCard(model, request: request, screen: screen, notifyPhone: false, completion: completion)
+            }
+            return
+        }
+
+        showCard(model, request: request, screen: screen, notifyPhone: true, completion: completion)
+    }
+
+    /// Finish handler for a request that has no card on screen (phone only, or no display).
+    private func headlessFinish(_ request: PermissionRequest, _ completion: @escaping (Decision) -> Void) -> (Decision) -> Void {
+        { [weak self] decision in
+            self?.activeRequest = nil
+            self?.activeModel = nil
+            self?.activeCommand = nil
+            PhoneRelay.shared.requestFinished(request)
+            completion(decision)
+        }
+    }
+
+    private func showCard(_ model: PermissionModel, request: PermissionRequest, screen: NSScreen, notifyPhone: Bool,
+                          completion: @escaping (Decision) -> Void) {
         let geometry = IslandScreenGeometry(screen: screen)
         SoundEngine.shared.playPopup()
 
@@ -1291,6 +1314,6 @@ final class PermissionPopupController {
         panel.makeKeyAndOrderFront(nil)
         
         model.start()
-        PhoneRelay.shared.requestPresented(request)
+        if notifyPhone { PhoneRelay.shared.requestPresented(request) }
     }
 }

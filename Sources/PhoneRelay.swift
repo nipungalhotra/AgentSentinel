@@ -20,6 +20,12 @@ struct PhoneConfig: Codable, Equatable {
     var secret: String
     var pushAfter: Double = 15
     var details: String = "full"
+    /// Where a request is asked: "auto" (Mac first, phone when away or after the delay),
+    /// "both" (Mac and phone at once) or "phone" (phone only, no card on the Mac).
+    var mode: String = "auto"
+    /// Expo push tokens of phones running the loggdin app (mobile/). They get a short
+    /// "request waiting" notification through Expo's push service; the command is never in it.
+    var pushTokens: [String] = []
 
     init(topic: String, secret: String) {
         self.topic = topic
@@ -35,6 +41,10 @@ struct PhoneConfig: Codable, Equatable {
         server = s.isEmpty ? PhoneRelay.defaultServer : s
         pushAfter = min(max(((try? c.decodeIfPresent(Double.self, forKey: .pushAfter)) ?? nil) ?? 15, 0), 100)
         details = ((try? c.decodeIfPresent(String.self, forKey: .details)) ?? nil) == "minimal" ? "minimal" : "full"
+        let m = ((try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil) ?? "auto"
+        mode = ["both", "phone"].contains(m) ? m : "auto"
+        let tokens = ((try? c.decodeIfPresent([String].self, forKey: .pushTokens)) ?? nil) ?? []
+        pushTokens = Array(tokens.filter(PhoneRelay.isPushToken).suffix(PhoneRelay.maxPushTokens))
     }
 
     var serverURL: String {
@@ -49,6 +59,80 @@ struct PhoneConfig: Codable, Equatable {
 final class PhoneRelay {
     static let shared = PhoneRelay()
     nonisolated static let defaultServer = "https://ntfy.sh"
+    /// The loggdin phone app on the web (mobile/). A pairing link puts the topic after "#",
+    /// which browsers never send to the server.
+    nonisolated static let phoneAppURL = "https://app.loggdin.com"
+
+    nonisolated static let expoPushURL = "https://exp.host/--/api/v2/push/send"
+    nonisolated static let maxPushTokens = 5
+
+    nonisolated static func isPushToken(_ s: String) -> Bool {
+        s.range(of: #"^Expo(nent)?PushToken\[[A-Za-z0-9_-]{10,100}\]$"#, options: .regularExpression) != nil
+    }
+
+    /// Parses "lg1-push <token> <sig>", the message loggdin Pocket posts to register itself; the
+    /// signature must come from the pairing key, so only a phone that was given the code can register.
+    nonisolated static func parsePushRegistration(_ text: String, secret: String) -> String? {
+        let parts = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.count == 3, parts[0] == "lg1-push", isPushToken(parts[1]) else { return nil }
+        let key = SymmetricKey(data: Data(pairKey(secret: secret).utf8))
+        let mac = HMAC<SHA256>.authenticationCode(for: Data("loggdin-phone|v1|push|\(parts[1])".utf8), using: key)
+        let expected = Array(String(mac.map { String(format: "%02x", $0) }.joined().prefix(32)).utf8)
+        let given = Array(parts[2].utf8)
+        guard expected.count == given.count else { return nil }
+        var diff: UInt8 = 0
+        for i in expected.indices { diff |= expected[i] ^ given[i] }
+        return diff == 0 ? parts[1] : nil
+    }
+
+    /// Pairing key, derived from the secret: the phone signs its notification registration with it, so
+    /// knowing the topic alone is not enough to get a phone registered. Never sent over the network.
+    nonisolated static func pairKey(secret: String) -> String {
+        let mac = HMAC<SHA256>.authenticationCode(for: Data("loggdin-phone|v1|pair".utf8), using: SymmetricKey(data: Data(secret.utf8)))
+        return String(mac.map { String(format: "%02x", $0) }.joined().prefix(16))
+    }
+
+    // MARK: End-to-end encryption
+    // What goes through the relay is sealed with keys derived from the pairing key, which only the QR
+    // code / pairing code carries: the relay and anyone who knows the topic see neither the request nor
+    // its signed answer buttons. Encrypt-then-MAC with HMAC-SHA256 (keystream PRF and MAC), the same
+    // construction as bin/loggdin.py and mobile/src/hmac.ts: "lg1e " + base64(nonce16 || ct || tag16).
+
+    nonisolated private static func hmac(_ key: Data, _ message: Data) -> Data {
+        Data(HMAC<SHA256>.authenticationCode(for: message, using: SymmetricKey(data: key)))
+    }
+
+    nonisolated static func seal(_ object: [String: Any], secret: String) -> String? {
+        guard let plain = try? JSONSerialization.data(withJSONObject: object) else { return nil }
+        let pk = Data(pairKey(secret: secret).utf8)
+        let encKey = hmac(pk, Data("loggdin-phone|v1|enc".utf8))
+        let macKey = hmac(pk, Data("loggdin-phone|v1|mac".utf8))
+        var nonce = Data(count: 16)
+        guard nonce.withUnsafeMutableBytes({ SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }) == errSecSuccess else { return nil }
+        var stream = Data()
+        var counter: UInt32 = 0
+        while stream.count < plain.count {
+            var be = counter.bigEndian
+            stream += hmac(encKey, nonce + Data(bytes: &be, count: 4))
+            counter += 1
+        }
+        let cipher = Data(zip(plain, stream).map { $0 ^ $1 })
+        let tag = hmac(macKey, nonce + cipher).prefix(16)
+        return "lg1e " + (nonce + cipher + tag).base64EncodedString()
+    }
+
+    /// What a person types into loggdin Pocket when they can't scan: "<topic>.<pairing key>".
+    nonisolated static func pairingCode(_ cfg: PhoneConfig) -> String {
+        "\(cfg.topic).\(pairKey(secret: cfg.secret))"
+    }
+
+    /// Link the dashboard QR code opens: loggdin Pocket, already paired with this computer.
+    /// Everything after "#" stays in the phone; browsers never send it to a server.
+    nonisolated static func pairingLink(_ cfg: PhoneConfig) -> String {
+        let code = pairingCode(cfg)
+        let target = cfg.serverURL == defaultServer ? code : "\(cfg.serverURL)/\(code)"
+        return "\(phoneAppURL)/#\(target)"
+    }
     /// Seconds of no keyboard/mouse input after which the Mac counts as "away" and pushes at once.
     static let idleAwaySeconds: Double = 60
 
@@ -62,6 +146,7 @@ final class PhoneRelay {
     private var pushed: [String: PhoneConfig] = [:]
     private var screenLocked = false
     private var testWaiter: (id: String, done: (Decision) -> Void)?
+    private var answeredByPhone: Set<String> = []
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -82,6 +167,9 @@ final class PhoneRelay {
         reloadIfChanged()
         return config?.enabled == true
     }
+
+    /// "Phone only" mode: the request is asked on the phone and no card is shown on the Mac.
+    var isPhoneOnly: Bool { isActive && config?.mode == "phone" }
 
     // MARK: Config
 
@@ -125,7 +213,7 @@ final class PhoneRelay {
         for i in bytes.indices { bytes[i] = UInt8.random(in: 0...255, using: &rng) }
         let secret = bytes.map { String(format: "%02x", $0) }.joined()
         var cfg = PhoneConfig(topic: topic, secret: secret)
-        if let old = config { cfg.server = old.server; cfg.pushAfter = old.pushAfter; cfg.details = old.details }
+        if let old = config { cfg.server = old.server; cfg.pushAfter = old.pushAfter; cfg.details = old.details; cfg.mode = old.mode }
         save(cfg)
     }
 
@@ -133,6 +221,14 @@ final class PhoneRelay {
         guard var cfg = config else { if on { setUp() }; return }
         cfg.enabled = on
         save(cfg)
+    }
+
+    /// Remembers a phone that asked for notifications (newest last, at most `maxPushTokens`).
+    func registerPushToken(_ token: String) {
+        guard var cfg = config, !cfg.pushTokens.contains(token) else { return }
+        cfg.pushTokens = Array((cfg.pushTokens + [token]).suffix(Self.maxPushTokens))
+        save(cfg)
+        NSLog("loggdin phone: registered a phone for notifications")
     }
 
     func update(_ change: (inout PhoneConfig) -> Void) {
@@ -184,13 +280,33 @@ final class PhoneRelay {
     func requestPresented(_ request: PermissionRequest, forceNow: Bool = false) {
         guard isActive, let cfg = config else { return }
         let id = request.id.uuidString
-        let delay = (forceNow || userAway) ? 0 : cfg.pushAfter
+        let delay = (forceNow || userAway || cfg.mode != "auto") ? 0 : cfg.pushAfter
         Task { @MainActor in
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard PermissionPopupController.shared.isStillAsking(requestId: id), let cfg = self.config, cfg.enabled else { return }
             let ok = await Self.publish(cfg, request: request)
             if ok { self.pushed[id] = cfg }
         }
+    }
+
+    /// Pushes a request at once and reports whether the phone service accepted it.
+    /// Used by "phone only" mode, which falls back to the Mac card when this fails.
+    func pushNow(_ request: PermissionRequest) async -> Bool {
+        guard isActive, let cfg = config else { return false }
+        let id = request.id.uuidString
+        guard await Self.publish(cfg, request: request) else { return false }
+        if PermissionPopupController.shared.isStillAsking(requestId: id) {
+            pushed[id] = cfg
+        } else {
+            // Answered while the push was in flight: take the notification back.
+            await Self.send(method: "PUT", url: "\(cfg.serverURL)/\(cfg.topic)/\(Self.sequenceId(id))/clear", body: nil)
+        }
+        return true
+    }
+
+    /// True once if the phone answered this request (for the audit log's "via": "phone").
+    func takeAnsweredByPhone(_ requestId: String) -> Bool {
+        answeredByPhone.remove(requestId.uppercased()) != nil
     }
 
     func requestFinished(_ request: PermissionRequest) {
@@ -225,10 +341,8 @@ final class PhoneRelay {
         var verbs: [(String, String)] = [("allow-once", "Allow once")]
         if !high { verbs.append(("allow-10m", "Allow 10 min")) }
         verbs.append(("deny", "Deny"))
-        let replyURL = "\(cfg.serverURL)/\(cfg.replyTopic)"
-        let actions: [[String: Any]] = verbs.map { verb, label in
-            ["action": "http", "label": label, "url": replyURL, "method": "POST", "clear": true,
-             "body": "lg1 \(id) \(verb) \(signature(secret: cfg.secret, requestId: id, verb: verb))"]
+        let actions: [[String]] = verbs.map { verb, label in
+            [label, "lg1 \(id) \(verb) \(signature(secret: cfg.secret, requestId: id, verb: verb))"]
         }
         let agent = request.requestedBy.isEmpty ? "An agent" : request.requestedBy
         let title = "\(agent) needs permission" + (high ? " · HIGH RISK" : "")
@@ -243,11 +357,23 @@ final class PhoneRelay {
             if cmd.count > 300 { cmd = String(cmd.prefix(299)) + "…" }
             body = "\(cmd)\nFolder: \(folder)"
         }
-        let payload: [String: Any] = ["topic": cfg.topic, "title": title, "message": body, "actions": actions,
+        guard let sealed = seal(["t": title, "m": body, "h": high, "a": actions], secret: cfg.secret) else { return false }
+        let payload: [String: Any] = ["topic": cfg.topic, "title": "loggdin", "message": sealed,
                                       "priority": high ? 5 : 4, "tags": [high ? "warning" : "lock"],
                                       "sequence_id": sequenceId(id)]
         let ok = await send(method: "POST", url: cfg.serverURL + "/", body: try? JSONSerialization.data(withJSONObject: payload))
         if !ok { NSLog("loggdin phone: push failed") }
+        if !cfg.pushTokens.isEmpty {
+            // The loggdin phone app: only the agent, risk and folder go through Expo's servers.
+            let note = "\(request.risk.rawValue.capitalized) risk request in \(folder). Open loggdin to answer."
+            let messages: [[String: Any]] = cfg.pushTokens.map {
+                ["to": $0, "title": title, "body": note, "sound": "default", "priority": "high",
+                 "channelId": "requests", "ttl": 110, "data": ["seq": sequenceId(id)]]
+            }
+            let delivered = await send(method: "POST", url: expoPushURL, body: try? JSONSerialization.data(withJSONObject: messages))
+            if !delivered { NSLog("loggdin phone: app notification failed") }
+            return ok || delivered
+        }
         return ok
     }
 
@@ -300,8 +426,12 @@ final class PhoneRelay {
                     guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                           obj["event"] as? String == "message" else { continue }
                     if let mid = obj["id"] as? String { since = mid }
-                    guard let text = obj["message"] as? String,
-                          let reply = parseReply(text, secret: cfg.secret) else { continue }
+                    guard let text = obj["message"] as? String else { continue }
+                    if let token = parsePushRegistration(text, secret: cfg.secret) {
+                        await MainActor.run { PhoneRelay.shared.registerPushToken(token) }
+                        continue
+                    }
+                    guard let reply = parseReply(text, secret: cfg.secret) else { continue }
                     await MainActor.run { PhoneRelay.shared.handle(reply.id, reply.decision) }
                 }
             } catch {
@@ -321,6 +451,7 @@ final class PhoneRelay {
             return
         }
         if PermissionPopupController.shared.submitExternalDecision(decision, forRequestId: id) {
+            answeredByPhone.insert(id.uppercased())
             NSLog("loggdin phone: \(decision.summary) for \(id.prefix(8))")
         }
     }
