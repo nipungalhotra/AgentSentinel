@@ -556,6 +556,35 @@ def send_via_http(payload, port=None, timeout=120, path='/ask'):
         debug_log(f"HTTP EXCEPTION: {e}\n")
         return None
 
+def respond(agent, event, allowed, message=None, updated_permissions=None):
+    """Write the decision in the calling agent's own hook format, then exit.
+
+    Every exit path must go through here: an answer in another agent's format is ignored,
+    so a deny would silently turn into the agent's normal prompt.
+    """
+    if agent == 'antigravity':          # Google Antigravity IDE contract (docs/hooks.md)
+        out = {'decision': 'allow'} if allowed else {'decision': 'deny', 'reason': message or 'Action denied by user in loggdin'}
+    elif agent in ('codex', 'chatgpt'):   # OpenAI Codex / ChatGPT CLI contract
+        out = ({'decision': 'allow', 'behavior': 'allow', 'status': 'approved'} if allowed else
+               {'decision': 'deny', 'behavior': 'deny', 'status': 'rejected'})
+        if message and not allowed:
+            out['reason'] = message
+    elif agent in ('copilot', 'muse'):    # GitHub Copilot CLI contract
+        word = 'allow' if allowed else 'deny'
+        out = {'permissionDecision': word, 'decision': word}
+        if message and not allowed:
+            out['permissionDecisionReason'] = message
+    else:                                 # Claude Code & universal agents
+        dec = {'behavior': 'allow'} if allowed else {'behavior': 'deny', 'message': message or 'Action denied in loggdin'}
+        if allowed and updated_permissions:
+            dec['updatedPermissions'] = updated_permissions
+        word = 'allow' if allowed else 'deny'
+        out = {'decision': word, 'behavior': word, 'hookSpecificOutput': {'hookEventName': event, 'decision': dec}}
+    sys.stdout.write(json.dumps(out) + '\n')
+    sys.stdout.flush()
+    sys.exit(0)
+
+
 def main():
     # Parse CLI flags
     args = sys.argv[1:]
@@ -653,17 +682,11 @@ def main():
             cmd_clean = command.strip().lower()
             blocked = policy.get('blockedCommands') or []
             if any(b.lower() in cmd_clean for b in blocked):
-                out = {'decision': 'deny', 'reason': 'Action blocked by repository security policy (.loggdin.json)'}
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
+                respond(agent, event, False, 'Action blocked by repository security policy (.loggdin.json)')
 
             allowed_cmds = policy.get('allowedCommands') or []
             if any(cmd_clean == a.lower() or cmd_clean.startswith(a.lower() + ' ') for a in allowed_cmds):
-                out = {'decision': 'allow'}
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
+                respond(agent, event, True)
 
             require_touch = policy.get('requireTouchID') or []
             if any(t.lower() in cmd_clean for t in require_touch):
@@ -671,10 +694,7 @@ def main():
 
         # Check deduplication cache: if the exact same (tool, command) was approved recently, auto-allow!
         if check_recent_dedup(t_name, command):
-            out = {'decision': 'allow'}
-            sys.stdout.write(json.dumps(out) + '\n')
-            sys.stdout.flush()
-            sys.exit(0)
+            respond(agent, event, True)
 
         resolved_dir = resolve_directory(payload)
         modifies_files = extract_modifies_files(payload, t_name)
@@ -745,86 +765,18 @@ def main():
             decision = resp.get('decision', 'deny')
             scope = resp.get('scope', 'once')
 
-            if allowed:
+            if allowed and risk != 'high':   # high-risk approvals are never replayed
                 record_recent_dedup(t_name, command)
 
-            # Official Google Antigravity IDE Contract (docs/hooks.md)
-            if agent == 'antigravity':
-                if allowed:
-                    out = {'decision': 'allow'}
-                else:
-                    out = {
-                        'decision': 'deny',
-                        'reason': 'Action denied by user in loggdin'
-                    }
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
+            respond(agent, event, allowed,
+                    updated_permissions=payload.get('permission_suggestions') if scope == 'always' else None)
 
-            # OpenAI Codex / ChatGPT CLI Contract
-            if agent in ('codex', 'chatgpt'):
-                if allowed:
-                    out = {'decision': 'allow', 'behavior': 'allow', 'status': 'approved'}
-                else:
-                    out = {'decision': 'deny', 'behavior': 'deny', 'status': 'rejected'}
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
-
-            # GitHub Copilot CLI Contract
-            if agent in ('copilot', 'muse'):
-                out = {'permissionDecision': 'allow' if allowed else 'deny', 'decision': 'allow' if allowed else 'deny'}
-                sys.stdout.write(json.dumps(out) + '\n')
-                sys.stdout.flush()
-                sys.exit(0)
-
-            # Claude Code & Universal Agents
-            if allowed:
-                out = {
-                    'decision': 'allow',
-                    'behavior': 'allow',
-                    'hookSpecificOutput': {
-                        'hookEventName': event,
-                        'decision': {'behavior': 'allow'}
-                    }
-                }
-                if scope == 'always' and payload.get('permission_suggestions'):
-                    out['hookSpecificOutput']['decision']['updatedPermissions'] = payload.get('permission_suggestions')
-            else:
-                out = {
-                    'decision': 'deny',
-                    'behavior': 'deny',
-                    'hookSpecificOutput': {
-                        'hookEventName': event,
-                        'decision': {
-                            'behavior': 'deny',
-                            'message': 'Action denied in loggdin'
-                        }
-                    }
-                }
-            sys.stdout.write(json.dumps(out) + '\n')
-            sys.stdout.flush()
+        # Daemon unreachable. By default give no decision, so the agent falls back to its own
+        # permission prompt: the developer isn't locked out, and nothing is approved unseen.
+        # LOGGDIN_FAIL_OPEN=1 restores the old behaviour of approving everything.
+        if os.environ.get('LOGGDIN_FAIL_OPEN') not in ('1', 'true', 'yes'):
             sys.exit(0)
-
-        # Fallback if server is not reachable: fail-open for all agents so developer isn't locked out
-        if agent == 'antigravity':
-            out = {'decision': 'allow'}
-        elif agent in ('codex', 'chatgpt'):
-            out = {'decision': 'allow', 'behavior': 'allow', 'status': 'approved'}
-        elif agent in ('copilot', 'muse'):
-            out = {'permissionDecision': 'allow', 'decision': 'allow'}
-        else:
-            out = {
-                'decision': 'allow',
-                'behavior': 'allow',
-                'hookSpecificOutput': {
-                    'hookEventName': event,
-                    'decision': {'behavior': 'allow'}
-                }
-            }
-        sys.stdout.write(json.dumps(out) + '\n')
-        sys.stdout.flush()
-        sys.exit(0)
+        respond(agent, event, True)
 
     # For other events (SessionStart, PostToolUse, Stop, SessionEnd): notify Sentinel asynchronously
     try:

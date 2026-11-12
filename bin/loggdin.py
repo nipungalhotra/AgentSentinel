@@ -29,6 +29,8 @@ Usage:
     loggdin uninstall <same targets>
     loggdin autostart [on|off]
     loggdin run <command...>       ask before running a shell command
+    loggdin test [agent] [--high]  show a demo request (nothing is executed)
+    loggdin popup                  approval card (started by the daemon)
     loggdin doctor | version
 """
 
@@ -36,6 +38,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -193,9 +196,34 @@ CATASTROPHIC = (
 )
 
 
+RECURSIVE_DELETE_VERBS = {"remove-item", "ri", "rm", "rmdir", "rd", "del", "erase"}
+RECURSIVE_FLAGS = {"/s", "-recurse", "-r", "-rf", "-fr", "-rfv", "-vrf"}
+WHOLE_DISK = re.compile(r"\bformat(?:\.com)?\s+[a-z]:|\bformat-volume\b|\bclear-disk\b|\bdiskpart\b|"
+                        r"\bvssadmin(?:\.exe)?\s+delete\s+shadows")
+
+
+def _is_drive_root(token, verb):
+    """C:\\  C:/  C:  C:\\*, and for Git Bash's rm also /c and /c/ — but not C:\\Users\\me\\proj.
+    (`/q`-style tokens are cmd.exe flags, so the /c form only counts after `rm`.)"""
+    t = token.strip("\"'")
+    if re.fullmatch(r"[a-z]:[\\/]*\*?", t):
+        return True
+    return verb == "rm" and bool(re.fullmatch(r"/[a-z]/?\*?", t))
+
+
 def is_catastrophic(cmd):
     c = " ".join(cmd.lower().split())
-    return any(p in c for p in CATASTROPHIC)
+    if any(p in c for p in CATASTROPHIC) or WHOLE_DISK.search(c):
+        return True
+    # Recursive delete of a whole drive, in PowerShell, cmd.exe or Git Bash syntax.
+    for part in re.split(r"&&|\|\||[;|&\n]", c):
+        words = part.split()
+        verb = words[0].rsplit("\\", 1)[-1] if words else ""
+        if (verb in RECURSIVE_DELETE_VERBS
+                and any(w in RECURSIVE_FLAGS or w.startswith("-recurse") for w in words[1:])
+                and any(_is_drive_root(w, verb) for w in words[1:])):
+            return True
+    return False
 
 
 def norm_dir(d):
@@ -291,7 +319,8 @@ class Store:
             self.grants = [g for g in self.grants if g["expires"] > now]
             if is_catastrophic(cmd):      # always needs a human, even right after an approval
                 return None
-            if now - self.recent.get((req["directory"], cmd), 0) < DEDUP_SECONDS:
+            # High risk: every request needs its own approval, so no replay window.
+            if req["risk"] != "high" and now - self.recent.get((req["directory"], cmd), 0) < DEDUP_SECONDS:
                 return {"type": "allow", "scope": "once"}
             for g in self.grants:
                 if cmd_matches(g["pattern"], cmd, req["risk"]) and dir_matches(g["directory"], req["directory"]):
@@ -306,7 +335,8 @@ class Store:
             return
         cmd, scope = req["command"], decision.get("scope", "once")
         with self.lock:
-            self.recent[(req["directory"], cmd)] = time.time()
+            if req["risk"] != "high":
+                self.recent[(req["directory"], cmd)] = time.time()
             if scope in ("tenMinutes", "tenMinutesAnywhere"):
                 # "all folders" is an explicit opt-in; never for high-risk requests.
                 anywhere = scope == "tenMinutesAnywhere" and req["risk"] != "high"
@@ -470,6 +500,14 @@ def parse_decision(decision_str, scope_str):
 def notify(req):
     if os.environ.get("LOGGDIN_NO_NOTIFY"):
         return
+    # The approval card is the main UI; the plain notification is only a fallback.
+    if not (popup_supported() and ensure_popup()):
+        notify_balloon(req)
+    if os.environ.get("LOGGDIN_OPEN_UI") == "1":
+        open_ui(quiet=True)
+
+
+def notify_balloon(req):
     title = f"loggdin: {req['requestedBy']} wants permission"
     body = (req["command"][:180] + ("…" if len(req["command"]) > 180 else "")) + "  —  run `loggdin ui` to decide"
     try:
@@ -493,8 +531,6 @@ def notify(req):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
-    if os.environ.get("LOGGDIN_OPEN_UI") == "1":
-        open_ui(quiet=True)
 
 
 # ---------------------------------------------------------------------------
@@ -580,14 +616,22 @@ class Daemon:
         req = parse_request(body)
         auto = self.store.evaluate(req)
         if auto:
-            self.store.remember(req, auto)
+            # Not remember(): re-saving an auto-allow would add a fresh 10-minute grant each time,
+            # so a grant in use would never expire. Only refresh the short dedup window.
+            if req["risk"] != "high":
+                with self.store.lock:
+                    self.store.recent[(req["directory"], req["command"])] = time.time()
             self.store.audit(req, auto, True)
             return decision_json(auto)
+        try:
+            timeout = max(1.0, min(float(body.get("timeout") or ASK_TIMEOUT), 3600.0))
+        except (TypeError, ValueError):
+            timeout = ASK_TIMEOUT
+        req["expiresAt"] = req["createdAt"] + timeout     # drives the card's countdown ring
         ev, holder = self.pending.add(req)
         log(f"ASK [{req['risk']}] {req['requestedBy']}: {req['command'][:120]}")
         notify(req)
-        timeout = float(body.get("timeout") or ASK_TIMEOUT)
-        ev.wait(timeout=max(1.0, min(timeout, 3600.0)))
+        ev.wait(timeout=timeout)
         self.pending.remove(req["id"])
         decision = holder.get("decision") or {"type": "timeout"}
         self.store.remember(req, decision)
@@ -831,6 +875,7 @@ class Daemon:
             log(f"could not bind 127.0.0.1:{self.port}-{self.port + PORT_RANGE - 1}: {last_err}")
             return 1
         save_port(self.port)
+        _popup["port"] = self.port
         self.serve_unix()
         log(f"loggdin {VERSION} listening on http://127.0.0.1:{self.port}  (state: {state_dir()})")
         try:
@@ -1133,7 +1178,9 @@ def install_target(target):
     elif target == "copilot":
         key = "powershell" if IS_WINDOWS else "bash"
         def h(ev, t):
-            return [{key: hook_cmd("copilot", ev), "timeoutSec": t}]
+            # PowerShell reads a leading quoted path as a string, not a command: it needs `&`.
+            cmd = ("& " if IS_WINDOWS else "") + hook_cmd("copilot", ev)
+            return [{key: cmd, "timeoutSec": t}]
         write_json(home(".copilot", "hooks", "sentinel.json"), {"hooks": {
             "permissionRequest": h("PermissionRequest", 120), "preToolUse": h("PreToolUse", 120),
             "postToolUse": h("PostToolUse", 10), "sessionStart": h("SessionStart", 10), "sessionEnd": h("SessionEnd", 10)}})
@@ -1262,6 +1309,620 @@ def set_autostart(on):
     with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(content)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Native approval card (Windows / Linux desktops): counterpart of the Mac notch card.
+# A separate `loggdin popup` process (Tk must own its main thread) polls the daemon,
+# shows the oldest pending request at the top centre of the screen, and posts the decision.
+# ---------------------------------------------------------------------------
+
+def pill_for(agent):
+    """(name, colour) of the agent badge; mirrors PillCatalog.definition in the Mac app."""
+    low = (agent or "").lower()
+    if "claude-code" in low or ("claude" in low and "desktop" not in low):
+        return "Claude Code", "#D97757"
+    if any(w in low for w in ("cowork", "claude-desktop", "desktop")):
+        return "Cowork", "#CC785C"
+    if any(w in low for w in ("antigravity", "gemini", "agy")):
+        return "Antigravity", "#4285F4"
+    if "cursor" in low:
+        return "Cursor", "#00D2FF"
+    if "codex" in low:
+        return "Codex", "#2DD4BF"
+    if "chatgpt" in low or "openai" in low:
+        return "ChatGPT", "#10A37F"
+    if "copilot" in low:
+        return "Copilot CLI", "#818CF8"
+    if any(w in low for w in ("term", "zsh", "bash", "powershell", "cli", "shell")):
+        return "Terminal", "#F59E0B"
+    return (agent or "Agent")[:18], "#8E939C"
+
+
+def popup_supported():
+    if IS_MAC or os.environ.get("LOGGDIN_POPUP", "1").lower() in ("0", "off", "false", "no"):
+        return False
+    if not IS_WINDOWS and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    import importlib.util
+    return importlib.util.find_spec("tkinter") is not None
+
+
+_popup = {"proc": None, "port": None}
+_popup_lock = threading.Lock()
+
+
+def ensure_popup():
+    """Start the card process once; it stays hidden between requests. True if it is running."""
+    with _popup_lock:
+        p = _popup["proc"]
+        if p is not None and p.poll() is None:
+            return True
+        try:
+            ensure_private_dir(state_dir())
+            logf = open(os.path.join(state_dir(), "popup.log"), "ab")
+            args = [python_exe(windowed=True), os.path.abspath(__file__), "popup",
+                    "--port", str(_popup["port"] or get_port())]
+            kw = dict(stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True)
+            if IS_WINDOWS:
+                kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            _popup["proc"] = subprocess.Popen(args, **kw)
+            return True
+        except Exception as e:
+            log(f"approval card unavailable: {e}")
+            return False
+
+
+def _mix(c1, c2, t):
+    """Blend colour c1 into c2 by t (0..1): Tk has no alpha, so tints are pre-mixed."""
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x * t + y * (1 - t)):02x}" for x, y in zip(a, b))
+
+
+def _light_theme():
+    forced = os.environ.get("LOGGDIN_THEME", "").lower()
+    if forced in ("light", "dark"):
+        return forced == "light"
+    if IS_WINDOWS:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+                return winreg.QueryValueEx(k, "AppsUseLightTheme")[0] == 1
+        except OSError:
+            return False
+    return False
+
+
+CARD_PALETTES = {
+    "dark": dict(bg="#1c1d22", border="#3a3c45", fg="#f2f3f5", muted="#9aa0aa", island="#000000",
+                 box="#111216", box_border="#2b2d34", chip="#2b2d34", seg="#26282e", seg_sel="#3a3d46",
+                 btn="#2c2e36", btn_hover="#373a43", btn_border="#3d4049", primary="#2f6fe4",
+                 primary_hover="#3d7cf0", ring_track="#33353d", warn_bg="#3b1e21",
+                 high="#ef4444", medium="#f59e0b", low="#22c55e"),
+    "light": dict(bg="#f8f8fa", border="#d5d8de", fg="#16181d", muted="#5f6672", island="#c9ccd2",
+                  box="#eceef2", box_border="#d9dce2", chip="#e1e4e9", seg="#e6e8ec", seg_sel="#ffffff",
+                  btn="#e9ebef", btn_hover="#dee1e6", btn_border="#d3d6dc", primary="#1f6feb",
+                  primary_hover="#2b7af5", ring_track="#dcdfe4", warn_bg="#fde8e8",
+                  high="#dc2626", medium="#d97706", low="#16a34a"),
+}
+
+CARD_SCOPES = (("once", "Once", "Allow once", "Just this once"),
+               ("10m", "10 min", "Allow 10 min", "For the next 10 minutes"),
+               ("10m-all", "10 min · all", "Allow 10 min, all folders", "For 10 minutes, in every folder"),
+               ("always", "Always", "Always allow", "Saved to your rules"))
+
+
+class ApprovalCard:
+    WIDTH = 420
+    HOLD_SECONDS = 1.0
+    ARM_DELAY = 0.6        # ignore keys at first, so typing in another window can't answer
+
+    def __init__(self, root, port=None, token=None, autostart=True):
+        import tkinter as tk
+        import tkinter.font as tkfont
+        self.root, self.port, self.tok = root, port, token
+        self.S = min(3.0, max(1.0, root.winfo_fpixels("1i") / 96.0))
+        self.P = CARD_PALETTES["light" if _light_theme() else "dark"]
+        fams = set(tkfont.families(root))
+        ui = next((f for f in ("Segoe UI", "Inter", "Cantarell", "DejaVu Sans") if f in fams), "TkDefaultFont")
+        semi = "Segoe UI Semibold" if "Segoe UI Semibold" in fams else None
+        mono = next((f for f in ("Cascadia Mono", "Consolas", "DejaVu Sans Mono") if f in fams), "TkFixedFont")
+
+        def font(size, bold=False, family=None):
+            return tkfont.Font(root=root, family=family or ui, size=-max(8, round(size * self.S)),
+                               weight="bold" if bold else "normal")
+        self.f_title = font(15.5, family=semi, bold=not semi)
+        self.f_orb = font(17, bold=True)
+        self.f_chip = font(11, family=semi, bold=not semi)
+        self.f_small = font(11.5)
+        self.f_tiny = font(10.5)
+        self.f_mono = font(12.5, family=mono)
+        self.f_mono_small = font(10.5, family=mono, bold=True)
+        self.f_seg = font(11.5)
+        self.f_seg_sel = font(11.5, family=semi, bold=not semi)
+        self.f_btn = font(13.5, family=semi, bold=not semi)
+        self.f_hint = font(10, family=mono)
+
+        self.req, self.queue, self.done = None, [], []
+        self.scope_i, self.details, self.copied, self.resolved = 0, False, False, None
+        self.hold_start, self.armed_at, self.fails, self.visible = None, 0.0, 0, False
+        self.ring = self.hold_bar = None
+        self.W, self.H = self.px(self.WIDTH), self.px(200)
+
+        root.withdraw()
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        root.title("loggdin")
+        bg = self.P["bg"]
+        if IS_WINDOWS:   # colour-keyed corners give the card its rounded shape
+            bg = "#010203"
+            root.attributes("-transparentcolor", bg)
+        root.configure(bg=bg)
+        self.c = tk.Canvas(root, highlightthickness=0, bd=0, bg=bg)
+        self.c.pack(fill="both", expand=True)
+        for key, fn in (("<Return>", lambda e: self.key_allow()), ("<KP_Enter>", lambda e: self.key_allow()),
+                        ("<Escape>", lambda e: self.decide(False, keyboard=True)),
+                        ("<Left>", lambda e: self.step_scope(-1)), ("<Right>", lambda e: self.step_scope(1)),
+                        ("<Tab>", lambda e: self.step_scope(1))):
+            root.bind(key, fn)
+        if autostart:
+            root.after(10, self.poll)
+        root.after(50, self.tick)
+
+    # -- helpers --
+    def px(self, v):
+        return int(round(v * self.S))
+
+    @property
+    def high(self):
+        return bool(self.req) and self.req.get("risk") == "high"
+
+    def rrect(self, x1, y1, x2, y2, r, **kw):
+        r = max(0, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
+        pts = (x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+               x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1)
+        return self.c.create_polygon(pts, smooth=True, **kw)
+
+    @staticmethod
+    def fit(font, text, width, middle=False):
+        text = " ".join(str(text).split()) if not middle else str(text)
+        if font.measure(text) <= width:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            cand = (text[:mid // 2] + "…" + text[len(text) - mid // 2:]) if middle else text[:mid] + "…"
+            lo, hi = (mid, hi) if font.measure(cand) <= width else (lo, mid - 1)
+        return (text[:lo // 2] + "…" + text[len(text) - lo // 2:]) if middle else text[:lo] + "…"
+
+    def bind(self, tag, click, hover_item=None, normal=None, hover=None):
+        c = self.c
+        c.tag_bind(tag, "<Button-1>", lambda e: click())
+
+        def enter(_):
+            c.config(cursor="hand2")
+            if hover_item:
+                c.itemconfig(hover_item, fill=hover)
+
+        def leave(_):
+            c.config(cursor="")
+            if hover_item:
+                c.itemconfig(hover_item, fill=normal)
+        c.tag_bind(tag, "<Enter>", enter)
+        c.tag_bind(tag, "<Leave>", leave)
+
+    def api(self, method, path, body=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                     data=json.dumps(body).encode("utf-8") if body is not None else None)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("X-Loggdin-Token", self.tok)
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    # -- daemon sync --
+    def poll(self):
+        try:
+            reqs = self.api("GET", "/pending?all=1").get("requests") or []
+            self.fails = 0
+        except Exception:
+            self.fails += 1
+            if self.fails >= 8:          # daemon gone: exit, it starts a new card when needed
+                self.root.destroy()
+                return
+            self.root.after(500, self.poll)
+            return
+        reqs = [r for r in reqs if r.get("id") not in self.done]
+        count_changed = len(reqs) != len(self.queue)
+        self.queue = reqs
+        if not self.resolved:
+            if self.req and self.req["id"] not in [r["id"] for r in reqs]:
+                self.req = None          # answered elsewhere (CLI, web page) or timed out
+            if not self.req and reqs:
+                self.show(reqs[0])
+            elif not reqs and self.visible:
+                self.hide()
+            elif self.req and count_changed:
+                self.render()
+        self.root.after(400, self.poll)
+
+    def show(self, req):
+        first = not self.visible
+        self.req, self.scope_i, self.details, self.copied, self.hold_start = req, 0, False, False, None
+        self.armed_at = time.time() + self.ARM_DELAY
+        self.render()
+        if first:
+            self.visible = True
+            root = self.root
+            x = (root.winfo_screenwidth() - self.W) // 2
+            self.top = self.px(8)
+            root.attributes("-alpha", 0.0)
+            root.geometry(f"{self.W}x{self.H}+{x}+{self.top - self.px(14)}")
+            root.deiconify()
+            root.lift()
+            root.attributes("-topmost", True)
+            try:
+                root.focus_force()
+            except Exception:
+                pass
+            self.animate_in(0)
+
+    def animate_in(self, step, steps=9):
+        t = (step + 1) / steps
+        ease = 1 - (1 - t) ** 3
+        x = (self.root.winfo_screenwidth() - self.W) // 2
+        self.root.geometry(f"{self.W}x{self.H}+{x}+{round(self.top - self.px(14) * (1 - ease))}")
+        self.root.attributes("-alpha", ease)
+        if step + 1 < steps:
+            self.root.after(14, lambda: self.animate_in(step + 1, steps))
+
+    def hide(self):
+        self.visible, self.req, self.resolved = False, None, None
+        self.root.withdraw()
+
+    # -- actions --
+    def key_allow(self):
+        if not self.high:
+            self.decide(True, keyboard=True)
+
+    def step_scope(self, d):
+        if self.req and not self.high and not self.resolved and time.time() >= self.armed_at:
+            self.scope_i = (self.scope_i + d) % len(CARD_SCOPES)
+            self.render()
+        return "break"
+
+    def decide(self, allow, held=False, keyboard=False):
+        if not self.req or self.resolved or (keyboard and time.time() < self.armed_at):
+            return
+        if allow and self.high and not held:
+            return
+        scope = "once" if self.high else CARD_SCOPES[self.scope_i][0]
+        try:
+            self.api("POST", "/decision", {"requestId": self.req["id"],
+                                           "decision": "allow" if allow else "deny", "scope": scope})
+        except Exception:
+            pass
+        done_text = next(s[3] for s in CARD_SCOPES if s[0] == scope)
+        self.resolved = (f"✓  Allowed · {done_text}", self.P["low"]) if allow else ("✕  Denied", self.P["high"])
+        self.done = (self.done + [self.req["id"]])[-50:]
+        self.hold_start = None
+        self.render()
+        self.root.after(750, self.after_resolved)
+
+    def after_resolved(self):
+        self.resolved, self.req = None, None
+        nxt = [r for r in self.queue if r["id"] not in self.done]
+        if nxt:
+            self.show(nxt[0])
+        else:
+            self.hide()
+
+    def copy(self):
+        if not self.req:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.req.get("command", ""))
+        self.copied = True
+        rid = self.req["id"]
+        self.render()
+
+        def reset():
+            if self.req and self.req["id"] == rid:
+                self.copied = False
+                self.render()
+        self.root.after(1600, reset)
+
+    def toggle_details(self):
+        self.details = not self.details
+        self.render()
+
+    def hold_press(self):
+        if not self.resolved:
+            self.hold_start = time.time()
+
+    def hold_release(self):
+        if self.hold_start is not None:
+            self.hold_start = None
+            self.c.delete("holdbar")
+
+    def tick(self):
+        try:
+            if self.visible and self.req and not self.resolved and self.ring is not None:
+                exp, made = self.req.get("expiresAt"), self.req.get("createdAt")
+                if exp and made and exp > made:
+                    frac = max(0.0, min(1.0, (exp - time.time()) / (exp - made)))
+                    col = self.P["high"] if frac < 0.2 else self.ring_color
+                    self.c.itemconfig(self.ring, extent=-max(0.1, frac * 359.9), outline=col)
+            if self.hold_start is not None and self.hold_geom:
+                frac = (time.time() - self.hold_start) / self.HOLD_SECONDS
+                x0, y0, x1, y1 = self.hold_geom
+                self.c.delete("holdbar")
+                w = max(y1 - y0, (x1 - x0) * min(1.0, frac))
+                self.rrect(x0, y0, x0 + w, y1, (y1 - y0) / 2, fill=_mix(self.P["high"], self.P["btn"], 0.55),
+                           outline="", tags=("hold", "holdbar"))
+                self.c.tag_raise("holdlabel")
+                if frac >= 1.0:
+                    self.hold_start = None
+                    self.decide(True, held=True)
+        except Exception:
+            pass
+        self.root.after(40, self.tick)
+
+    # -- drawing --
+    def chip(self, x, y, text, color):
+        P, c = self.P, self.c
+        w, h = self.f_chip.measure(text) + self.px(16), self.px(20)
+        self.rrect(x, y, x + w, y + h, h / 2, fill=_mix(color, P["bg"], 0.18), outline=_mix(color, P["bg"], 0.45))
+        fg = _mix(color, "#000000", 0.78) if P is CARD_PALETTES["light"] else _mix(color, "#ffffff", 0.85)
+        c.create_text(x + w / 2, y + h / 2, text=text, fill=fg, font=self.f_chip)
+        return x + w
+
+    def small_btn(self, right, y, text, tag, fn):
+        P = self.P
+        w, h = self.f_tiny.measure(text) + self.px(14), self.px(19)
+        bg = self.rrect(right - w, y, right, y + h, h / 2, fill=P["chip"], outline="", tags=(tag,))
+        self.c.create_text(right - w / 2, y + h / 2, text=text, font=self.f_tiny, tags=(tag,),
+                           fill=P["low"] if text.startswith("Copied") else P["muted"])
+        self.bind(tag, fn, bg, P["chip"], _mix(P["fg"], P["chip"], 0.12))
+        return right - w
+
+    def button(self, x0, y0, x1, y1, label, hint, tag, fn, primary):
+        P, c = self.P, self.c
+        fill = P["primary"] if primary else P["btn"]
+        hover = P["primary_hover"] if primary else P["btn_hover"]
+        bg = self.rrect(x0, y0, x1, y1, (y1 - y0) / 2, fill=fill,
+                        outline="" if primary else P["btn_border"], tags=(tag,))
+        fg = "#ffffff" if primary else P["fg"]
+        lw = self.f_btn.measure(label)
+        hw = self.f_hint.measure(hint) + self.px(10) if hint else 0
+        gap = self.px(8) if hint else 0
+        sx = (x0 + x1 - lw - gap - hw) / 2
+        cy = (y0 + y1) / 2
+        c.create_text(sx, cy, anchor="w", text=label, fill=fg, font=self.f_btn, tags=(tag,))
+        if hint:
+            hx = sx + lw + gap
+            hint_bg = _mix("#ffffff", fill, 0.18) if primary else _mix(P["fg"], fill, 0.1)
+            self.rrect(hx, cy - self.px(9), hx + hw, cy + self.px(9), self.px(5), fill=hint_bg, outline="", tags=(tag,))
+            c.create_text(hx + hw / 2, cy, text=hint, fill=_mix(fg, fill, 0.8), font=self.f_hint, tags=(tag,))
+        self.bind(tag, fn, bg, fill, hover)
+
+    def render(self):
+        if not self.req:
+            return
+        c, P, px, req = self.c, self.P, self.px, self.req
+        c.delete("all")
+        self.hold_geom = None
+        W = self.W
+        pad = px(20)
+        x0, x1 = pad, W - pad
+        name, pill_col = pill_for(req.get("requestedBy"))
+        risk = req.get("risk", "low")
+        risk_col = P.get(risk, P["low"])
+        accent = P["high"] if self.high else pill_col
+        self.ring_color = accent
+
+        # dynamic-island capsule, as on the Mac card for screens without a notch
+        y = px(9)
+        self.rrect(W / 2 - px(32), y, W / 2 + px(32), y + px(5), px(2.5), fill=P["island"], outline="")
+        y += px(17)
+
+        # header: countdown ring + agent initial, title, agent badge + risk chip
+        orb = px(46)
+        c.create_oval(x0 + px(5), y + px(5), x0 + orb - px(5), y + orb - px(5),
+                      fill=_mix(accent, P["bg"], 0.2), outline="")
+        c.create_text(x0 + orb / 2, y + orb / 2, text=name[:1].upper(), fill=accent, font=self.f_orb)
+        c.create_oval(x0 + px(1), y + px(1), x0 + orb - px(1), y + orb - px(1), outline=P["ring_track"], width=px(2.5))
+        self.ring = c.create_arc(x0 + px(1), y + px(1), x0 + orb - px(1), y + orb - px(1), start=90,
+                                 extent=-359.9, style="arc", outline=accent, width=px(2.5))
+        tx = x0 + orb + px(14)
+        more = len([r for r in self.queue if r.get("id") != req["id"]])
+        qw = 0
+        if more:
+            qt = f"+{more} waiting"
+            qw = self.f_tiny.measure(qt) + px(10)
+            c.create_text(x1, y + px(4), anchor="ne", text=qt, fill=P["muted"], font=self.f_tiny)
+        title = req.get("title") or f"{name} wants permission"
+        c.create_text(tx, y + px(2), anchor="nw", fill=P["fg"], font=self.f_title,
+                      text=self.fit(self.f_title, title, x1 - tx - qw))
+        bx = self.chip(tx, y + px(26), name, pill_col)
+        self.chip(bx + px(6), y + px(26), f"{risk.capitalize()} risk", risk_col)
+        y += orb + px(14)
+
+        # command box
+        inner, by = px(12), y
+        cy = by + inner
+        for i, col in enumerate(("#ff5f57", "#febc2e", "#28c840")):
+            c.create_oval(x0 + inner + i * px(12), cy + px(2), x0 + inner + i * px(12) + px(8), cy + px(10),
+                          fill=col, outline="")
+        c.create_text(x0 + inner + px(42), cy + px(6), anchor="w", fill=P["muted"], font=self.f_mono_small,
+                      text=self.fit(self.f_mono_small, str(req.get("requestedBy", "")).lower(), px(120)))
+        right = self.small_btn(x1 - inner, cy - px(3), "Hide" if self.details else "Details", "b_details",
+                               self.toggle_details)
+        self.small_btn(right - px(6), cy - px(3), "Copied ✓" if self.copied else "Copy", "b_copy", self.copy)
+        cy += px(24)
+        cmd = str(req.get("command", ""))
+        if len(cmd) > 600:
+            cmd = cmd[:400] + " … " + cmd[-180:]
+        t = c.create_text(x0 + inner, cy, anchor="nw", text=cmd, fill=P["fg"], font=self.f_mono,
+                          width=x1 - x0 - 2 * inner)
+        cy = c.bbox(t)[3] + px(8)
+        for w in (req.get("secretWarnings") or [])[:2]:
+            wt = c.create_text(x0 + inner + px(22), cy + px(4), anchor="nw", fill=P["high"], font=self.f_tiny,
+                               text=str(w), width=x1 - x0 - 2 * inner - px(30))
+            wb = c.bbox(wt)
+            box = self.rrect(x0 + inner - px(2), cy, x1 - inner + px(2), wb[3] + px(4), px(6),
+                             fill=P["warn_bg"], outline="")
+            c.create_text(x0 + inner + px(9), cy + px(4), anchor="n", text="!", fill=P["high"], font=self.f_chip)
+            c.tag_lower(box, wt)
+            cy = wb[3] + px(10)
+        c.create_text(x0 + inner, cy, anchor="nw", fill=P["muted"], font=self.f_tiny,
+                      text="in " + self.fit(self.f_tiny, req.get("directory", "~"), x1 - x0 - 2 * inner - px(20), middle=True))
+        bottom = cy + px(16) + inner - px(4)
+        box = self.rrect(x0, by, x1, bottom, px(13), fill=P["box"], outline=P["box_border"])
+        c.tag_lower(box)
+        y = bottom + px(12)
+
+        if self.details:
+            rows = [("Requested by", req.get("requestedBy", "")), ("Directory", req.get("directory", "")),
+                    ("Modifies files", req.get("modifiesFiles", ""))]
+            if req.get("blastRadius"):
+                rows.append(("Blast radius", req["blastRadius"]))
+            for label, val in rows:
+                c.create_text(x0 + px(4), y, anchor="nw", text=label, fill=P["muted"], font=self.f_small)
+                c.create_text(x1 - px(4), y, anchor="ne", fill=P["fg"], font=self.f_small,
+                              text=self.fit(self.f_small, val, (x1 - x0) * 0.62, middle=True))
+                y += px(21)
+            if req.get("diffPreview"):
+                lines = str(req["diffPreview"]).splitlines()[:8]
+                dy0 = y + px(4)
+                dy = dy0 + px(8)
+                for line in lines:
+                    col = P["low"] if line.startswith("+") else P["high"] if line.startswith("-") else \
+                        "#22d3ee" if line.startswith("@") else P["muted"]
+                    c.create_text(x0 + px(10), dy, anchor="nw", fill=col, font=self.f_hint,
+                                  text=self.fit(self.f_hint, line, x1 - x0 - px(20)))
+                    dy += px(15)
+                d = self.rrect(x0, dy0, x1, dy + px(6), px(8), fill=P["box"], outline=P["box_border"])
+                c.tag_lower(d)
+                y = dy + px(12)
+            y += px(4)
+
+        if self.resolved:
+            text, col = self.resolved
+            c.create_text(W / 2, y + px(19), text=text, fill=col, font=self.f_btn)
+            y += px(38)
+        else:
+            if self.high:
+                c.create_text(x0 + px(2), y, anchor="nw", fill=_mix(P["high"], P["fg"], 0.75), font=self.f_small,
+                              width=x1 - x0, text="High risk: approval covers this one request only.")
+                y += px(24)
+            else:
+                sh, segw = px(31), (x1 - x0) / len(CARD_SCOPES)
+                self.rrect(x0, y, x1, y + sh, px(9), fill=P["seg"], outline="")
+                for i, (_, label, _, _) in enumerate(CARD_SCOPES):
+                    sx, tag = x0 + i * segw, f"seg{i}"
+                    c.create_rectangle(sx + px(2), y + px(2), sx + segw - px(2), y + sh - px(2),
+                                       fill=P["seg"], outline="", tags=(tag,))
+                    sel = i == self.scope_i
+                    if sel:
+                        self.rrect(sx + px(3), y + px(3), sx + segw - px(3), y + sh - px(3), px(7),
+                                   fill=P["seg_sel"], outline=P["btn_border"], tags=(tag,))
+                    c.create_text(sx + segw / 2, y + sh / 2, text=label, tags=(tag,),
+                                  fill=P["fg"] if sel else P["muted"], font=self.f_seg_sel if sel else self.f_seg)
+
+                    def pick(i=i):
+                        self.scope_i = i
+                        self.render()
+                    self.bind(tag, pick)
+                y += sh + px(12)
+            bh, gap = px(40), px(10)
+            bw = (x1 - x0 - gap) / 2
+            self.button(x0, y, x0 + bw, y + bh, "Deny", "Esc", "b_deny", lambda: self.decide(False), False)
+            ax0 = x0 + bw + gap
+            if self.high:
+                self.rrect(ax0, y, x1, y + bh, bh / 2, fill=P["btn"], outline=P["high"], tags=("hold",))
+                c.create_text((ax0 + x1) / 2, y + bh / 2, text="Hold to allow", fill=P["fg"], font=self.f_btn,
+                              tags=("hold", "holdlabel"))
+                self.hold_geom = (ax0, y, x1, y + bh)
+                c.tag_bind("hold", "<ButtonPress-1>", lambda e: self.hold_press())
+                c.tag_bind("hold", "<ButtonRelease-1>", lambda e: self.hold_release())
+                c.tag_bind("hold", "<Enter>", lambda e: c.config(cursor="hand2"))
+                c.tag_bind("hold", "<Leave>", lambda e: (c.config(cursor=""), self.hold_release()))
+            else:
+                self.button(ax0, y, x1, y + bh, CARD_SCOPES[self.scope_i][2], "Enter", "b_allow",
+                            lambda: self.decide(True), True)
+            y += bh
+
+        H = y + px(18)
+        tint = _mix(accent, P["bg"], 0.11 if self.high else 0.06)
+        bg = self.rrect(px(1), px(1), W - px(1), H - px(1), px(24), fill=tint, outline=P["border"], width=max(1, px(1)))
+        c.tag_lower(bg)
+        if H != self.H:
+            self.H = H
+            if self.visible:
+                x = (self.root.winfo_screenwidth() - W) // 2
+                self.root.geometry(f"{W}x{H}+{x}+{self.top}")
+        self.c.config(width=W, height=H)
+
+
+def run_popup(port):
+    tok = get_token()
+    if not tok or not verify_daemon(port, tok):
+        log("popup: no verified loggdin daemon on this port")
+        return 1
+    if IS_WINDOWS:
+        try:   # crisp text on scaled displays
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+    except Exception as e:
+        log(f"popup: no GUI available ({e})")
+        return 3
+    ApprovalCard(root, port, tok)
+    root.mainloop()
+    return 0
+
+
+DEMOS = {   # `loggdin test <agent>`: realistic requests that are only shown, never executed
+    "terminal": ("Terminal", "Run terminal command?", "echo hello from loggdin", "low", None),
+    "claude": ("claude-code", "Claude Code Request", "npm install --save-dev vitest", "medium", None),
+    "codex": ("codex", "Codex Request", "pip install -r requirements.txt", "medium", None),
+    "copilot": ("copilot", "Copilot CLI Request", "gh pr merge 42 --squash --delete-branch", "medium", None),
+    "cursor": ("cursor", "Cursor Request", "git push --force origin main", "high", None),
+    "antigravity": ("Antigravity IDE", "Authorize deployment?",
+                    "gcloud run deploy api --region us-central1 --allow-unauthenticated", "high",
+                    ["Deploys to production and makes the service public"]),
+}
+
+
+def cmd_test(argv):
+    which = next((a for a in argv if not a.startswith("-")), "terminal").lower()
+    if which not in DEMOS:
+        print(f"usage: loggdin test [{'|'.join(DEMOS)}] [--high]", file=sys.stderr)
+        return 2
+    agent, title, command, risk, warnings = DEMOS[which]
+    if "--high" in argv:
+        risk = "high"
+    if not ensure_daemon():
+        print("❌ loggdin daemon is not running.", file=sys.stderr)
+        return 1
+    print(f"Demo request from {agent} ({risk} risk). Answer it on the card. Nothing will be executed.")
+    code, resp = http("POST", "/ask", {"command": command, "requestedBy": agent, "risk": risk, "title": title,
+                                       "cwd": os.getcwd(), "secretWarnings": warnings or [],
+                                       "tool": "Bash"}, timeout=ASK_TIMEOUT + 10)
+    if isinstance(resp, dict) and "decision" in resp:
+        print(f"→ {resp['decision']}" + (f" ({resp.get('scope')})" if resp.get("allowed") else ""))
+        return 0
+    print("⚠️  No response from loggdin daemon.", file=sys.stderr)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -1405,6 +2066,10 @@ def main(argv=None):
         return 0
     if cmd == "run":
         return cmd_run(argv)
+    if cmd == "test":
+        return cmd_test(argv)
+    if cmd == "popup":
+        return run_popup(int(argv[argv.index("--port") + 1]) if "--port" in argv else get_port())
     if cmd == "doctor":
         return doctor()
     if cmd in ("version", "--version", "-V"):
