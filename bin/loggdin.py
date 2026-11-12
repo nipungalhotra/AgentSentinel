@@ -442,6 +442,27 @@ def parse_request(body):
     }
 
 
+QUESTION_TIMEOUT = 60.0         # then the agent asks in its own UI (110 s when phone approvals are on)
+QUESTION_TIMEOUT_PHONE = 110.0
+NOTICE_SECONDS = 8.0
+NOTICE_REPEAT_SECONDS = 30.0    # agents repeat themselves: same alert at most once per 30 s
+
+
+def parse_questions(body):
+    """Mirror of AgentQuestion(json:) in the Mac app: up to 4 questions with up to 6 labelled options."""
+    items = []
+    for q in (body.get("questions") if isinstance(body.get("questions"), list) else [])[:4]:
+        if not isinstance(q, dict) or not isinstance(q.get("question"), str):
+            continue
+        opts = [{"label": str(o["label"])[:120], "description": str(o.get("description") or "")[:300]}
+                for o in (q.get("options") if isinstance(q.get("options"), list) else [])
+                if isinstance(o, dict) and o.get("label")][:6]
+        if opts:
+            items.append({"question": q["question"][:600], "header": str(q.get("header") or "")[:40],
+                          "multiSelect": bool(q.get("multiSelect")), "options": opts})
+    return items
+
+
 class Pending:
     def __init__(self):
         self.lock = threading.Lock()
@@ -458,17 +479,19 @@ class Pending:
             self.items = [it for it in self.items if it[0]["id"] != req_id]
 
     def first(self):
+        """Oldest permission request (questions and notices are answered on the card or phone)."""
         with self.lock:
-            return self.items[0][0] if self.items else None
+            return next((it[0] for it in self.items if it[0].get("kind", "permission") == "permission"), None)
 
     def all(self):
         with self.lock:
             return [it[0] for it in self.items]
 
     def resolve(self, decision, req_id=None):
+        """Without an id (CLI `allow` / `deny`) only permission requests are answered."""
         with self.lock:
             for req, ev, holder in self.items:
-                if req_id is None or req["id"] == req_id:
+                if req["id"] == req_id or (req_id is None and req.get("kind", "permission") == "permission"):
                     holder["decision"] = decision
                     ev.set()
                     return True
@@ -510,7 +533,9 @@ def notify(req):
 
 
 def notify_balloon(req):
-    title = f"loggdin: {req['requestedBy']} wants permission"
+    kind = req.get("kind", "permission")
+    title = (f"loggdin: {req['title']}" if kind != "permission" else
+             f"loggdin: {req['requestedBy']} wants permission")
     body = (req["command"][:180] + ("…" if len(req["command"]) > 180 else "")) + "  —  run `loggdin ui` to decide"
     try:
         if IS_WINDOWS:
@@ -567,12 +592,45 @@ button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.d
   var tok=''; try{tok=sessionStorage.getItem('lgtok')||'';}catch(e){}
   var list=document.getElementById('list');
   function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e;}
-  function decide(id,d,s){fetch('/decision',{method:'POST',headers:{'Content-Type':'application/json','X-Loggdin-Token':tok},
-    body:JSON.stringify({requestId:id,decision:d,scope:s})}).then(poll);}
+  function post(body){fetch('/decision',{method:'POST',headers:{'Content-Type':'application/json','X-Loggdin-Token':tok},
+    body:JSON.stringify(body)}).then(poll);}
+  function decide(id,d,s){post({requestId:id,decision:d,scope:s});}
+  var drafts={};   // keep half-answered questions across the 1.5 s refresh
+  function question(r){
+    var c=el('div','card'),top=el('div','row'),d=drafts[r.id]=drafts[r.id]||{};
+    top.appendChild(el('span','agent',r.requestedBy+' asks'));c.appendChild(top);
+    r.questions.forEach(function(q,qi){
+      c.appendChild(el('p',null,q.question));
+      var row=el('div','row');
+      q.options.forEach(function(o,oi){
+        var on=(d[qi]||[]).indexOf(oi)>=0,b=el('button',on?'primary':'',o.label);
+        if(o.description)b.title=o.description;
+        b.onclick=function(){var cur=d[qi]||[];
+          d[qi]=q.multiSelect?(on?cur.filter(function(x){return x!==oi;}):cur.concat([oi])):[oi];poll();};
+        row.appendChild(b);});
+      c.appendChild(row);
+      if(q.multiSelect)c.appendChild(el('div','meta','Pick one or more.'));
+    });
+    var done=r.questions.every(function(q,qi){return (d[qi]||[]).length;}),b=el('div','row');
+    var send=el('button','primary','Send answer');send.disabled=!done;
+    send.onclick=function(){var a={};r.questions.forEach(function(q,qi){
+      a[q.question]=d[qi].slice().sort().map(function(i){return q.options[i].label;}).join(', ');});
+      delete drafts[r.id];post({requestId:r.id,answers:a});};
+    var pass=el('button','','Answer in '+r.requestedBy);pass.onclick=function(){post({requestId:r.id,decision:'terminal'});};
+    b.appendChild(send);b.appendChild(pass);c.appendChild(b);return c;
+  }
+  function notice(r){
+    var c=el('div','card');c.appendChild(el('div','agent',r.title));
+    if(r.message)c.appendChild(el('pre',null,r.message));
+    var x=el('button','','Dismiss');x.onclick=function(){post({requestId:r.id,decision:'dismiss'});};
+    c.appendChild(x);return c;
+  }
   function render(items){
     list.textContent='';
     if(!items.length){list.appendChild(el('p','empty','No pending requests.'));return;}
     items.forEach(function(r){
+      if(r.kind==='question'){list.appendChild(question(r));return;}
+      if(r.kind==='notice'){list.appendChild(notice(r));return;}
       var c=el('div','card'),top=el('div','row');
       top.appendChild(el('span','agent',r.requestedBy));top.appendChild(el('span','pill '+r.risk,r.risk+' risk'));
       c.appendChild(top);c.appendChild(el('div','meta',r.subtitle));
@@ -804,6 +862,55 @@ def phone_publish(cfg, req):
     return phone_request("POST", cfg["server"] + "/", payload)
 
 
+def phone_folder(directory):
+    d = str(directory or "~")
+    last = os.path.basename(d.rstrip("/\\"))
+    return "your home folder" if not last or d == "~" else last
+
+
+def phone_parse_option(cfg, text):
+    """'lg1 <id> opt-<n> <sig>': an option tapped for an agent question -> (req_id, n) or None."""
+    parts = str(text or "").strip().split()
+    if len(parts) != 4 or parts[0] != "lg1" or not re.fullmatch(r"opt-[0-9]", parts[2]):
+        return None
+    if not hmac.compare_digest(parts[3], phone_sig(cfg["secret"], parts[1], parts[2])):
+        return None
+    return parts[1], int(parts[2][4:])
+
+
+def _phone_deliver(cfg, sealed, seq, priority, expo_title, expo_body):
+    payload = {"topic": cfg["topic"], "title": "loggdin", "message": sealed, "priority": priority,
+               "tags": ["speech_balloon"], "sequence_id": seq}
+    ok, err = phone_request("POST", cfg["server"] + "/", payload)
+    if cfg.get("pushTokens"):
+        messages = [{"to": t, "title": expo_title, "body": expo_body, "sound": "default", "priority": "high",
+                     "channelId": "requests", "ttl": 110, "data": {"seq": seq}} for t in cfg["pushTokens"]]
+        app_ok, app_err = phone_request("POST", PHONE_EXPO_PUSH_URL, messages)
+        return ok or app_ok, err or app_err
+    return ok, err
+
+
+def phone_publish_question(cfg, req):
+    """Same message as PhoneRelay.publishQuestion: one signed button per option for a single
+    single-choice question; anything longer says to answer on the computer."""
+    item = req["questions"][0]
+    single = len(req["questions"]) == 1 and not item["multiSelect"]
+    actions = [[o["label"], f"lg1 {req['id']} opt-{i} {phone_sig(cfg['secret'], req['id'], f'opt-{i}')}"]
+               for i, o in enumerate(item["options"][:6])] if single else []
+    folder = phone_folder(req.get("directory"))
+    more = "" if actions else "\nAnswer this one on your computer."
+    sealed = phone_seal(cfg, {"k": "q", "t": f"{req['requestedBy']} asks", "m": f"{item['question']}\nFolder: {folder}{more}",
+                              "h": False, "a": actions})
+    return _phone_deliver(cfg, sealed, phone_seq(req["id"]), 4, f"{req['requestedBy']} has a question",
+                          f"In {folder}. Open loggdin to answer.")
+
+
+def phone_publish_notice(cfg, req):
+    folder = phone_folder(req.get("directory"))
+    sealed = phone_seal(cfg, {"k": "n", "t": req["title"], "m": f"{req.get('message', '')}\nFolder: {folder}", "a": []})
+    return _phone_deliver(cfg, sealed, "lg-n" + secrets.token_hex(10), 3, req["title"], f"In {folder}.")
+
+
 def phone_seq(req_id):
     return "lg-" + re.sub(r"[^A-Za-z0-9]", "", str(req_id)).lower()[:40]
 
@@ -825,8 +932,9 @@ def phone_request(method, url, payload, timeout=10):
         return False, str(e)
 
 
-def phone_listen(cfg, on_reply, should_stop, since=None):
-    """Stream the reply topic; calls on_reply(req_id, decision) for every validly signed reply.
+def phone_listen(cfg, on_reply, should_stop, since=None, on_option=None):
+    """Stream the reply topic; calls on_reply(req_id, decision) for every validly signed reply
+    (and on_option(req_id, n) for a signed answer to an agent question).
     Returns the last message id seen so a reconnect resumes without losing replies."""
     url = f"{cfg['server']}/{phone_reply_topic(cfg)}/json?since={since or int(time.time()) - 5}"
     req = urllib.request.Request(url, headers={"User-Agent": f"loggdin/{VERSION}"})
@@ -845,6 +953,11 @@ def phone_listen(cfg, on_reply, should_stop, since=None):
             if token:
                 if phone_register_push_token(token):
                     log("phone: registered a phone for notifications")
+                continue
+            pick = phone_parse_option(cfg, msg.get("message"))
+            if pick:
+                if on_option:
+                    on_option(*pick)
                 continue
             parsed = phone_parse_reply(cfg, msg.get("message"))
             if parsed:
@@ -872,10 +985,13 @@ class PhoneRelay:
         cfg = load_phone()
         if not req or not cfg or not cfg.get("enabled"):
             return
-        ok, err = phone_publish(cfg, req)
-        app_ok, app_err = phone_app_notify(cfg, req)
-        if not app_ok:
-            log(f"phone: app notification failed ({app_err})")
+        if req.get("kind") == "question":
+            ok, err = phone_publish_question(cfg, req)
+        else:
+            ok, err = phone_publish(cfg, req)
+            app_ok, app_err = phone_app_notify(cfg, req)
+            if not app_ok:
+                log(f"phone: app notification failed ({app_err})")
         if ok:
             with self.lock:
                 self.pushed[req_id] = cfg
@@ -892,8 +1008,30 @@ class PhoneRelay:
             threading.Thread(target=phone_clear, args=(cfg, req_id), daemon=True).start()
 
     def on_reply(self, req_id, decision):
+        req = next((r for r in self.pending.all() if r["id"] == req_id), None)
+        if req and req.get("kind", "permission") != "permission":
+            return                      # an allow/deny reply can't answer a question or notice
         if self.pending.resolve(dict(decision, via="phone"), req_id):
             log(f"phone: {decision.get('type')} {req_id[:8]}")
+
+    def on_option(self, req_id, n):
+        """An option tapped in loggdin Pocket: only for one single-choice question, as on the Mac."""
+        req = next((r for r in self.pending.all() if r["id"] == req_id), None)
+        if not req or req.get("kind") != "question" or len(req["questions"]) != 1:
+            return
+        item = req["questions"][0]
+        if item["multiSelect"] or not 0 <= n < len(item["options"]):
+            return
+        if self.pending.resolve({"type": "answer", "answers": {item["question"]: item["options"][n]["label"]},
+                                 "via": "phone"}, req_id):
+            log(f"phone: answered {req_id[:8]}")
+
+    def notice(self, req):
+        """Alerts go to the phone only when it is set to get everything at once (as on the Mac)."""
+        cfg = load_phone()
+        if not cfg or not cfg.get("enabled") or cfg["mode"] == "auto" or os.environ.get("LOGGDIN_NO_PHONE"):
+            return
+        threading.Thread(target=phone_publish_notice, args=(cfg, req), daemon=True).start()
 
     def run(self):
         def loop():
@@ -910,7 +1048,7 @@ class PhoneRelay:
                 changed = lambda: (lambda c: not c or not c.get("enabled") or
                                    (c["server"], c["topic"], c["secret"]) != current)(load_phone())
                 try:
-                    since = phone_listen(cfg, self.on_reply, changed, since) or since
+                    since = phone_listen(cfg, self.on_reply, changed, since, self.on_option) or since
                     delay = 2
                 except Exception as e:
                     log(f"phone: listener reconnecting ({e})")
@@ -926,6 +1064,8 @@ class Daemon:
         self.store = Store()
         self.pending = Pending()
         self.phone = PhoneRelay(self.pending)
+        self.recent_notices = {}            # (agent, title, message) -> last shown
+        self.notice_lock = threading.Lock()
         self.started = time.time()
         self.last_event = None
         self.httpd = None
@@ -960,6 +1100,71 @@ class Daemon:
         self.store.audit(req, decision, False)
         log(f"  -> {decision}")
         return decision_json(decision)
+
+    # -- agent questions and "waiting for you" notices (same contract as the Mac app) --
+    def question(self, body):
+        """Show an agent's question; returns {"answers": {question: label}}, or {} to let the agent ask."""
+        items = parse_questions(body)
+        if not items:
+            return {"answers": {}}
+        cfg = load_phone()
+        phone_on = bool(cfg and cfg.get("enabled") and not os.environ.get("LOGGDIN_NO_PHONE"))
+        try:
+            timeout = float(body.get("timeout") or (QUESTION_TIMEOUT_PHONE if phone_on else QUESTION_TIMEOUT))
+        except (TypeError, ValueError):
+            timeout = QUESTION_TIMEOUT
+        timeout = max(1.0, min(timeout, 600.0))
+        agent = str(body.get("agent") or "An agent")[:60]
+        now = time.time()
+        req = {"id": str(uuid.uuid4()).upper(), "kind": "question", "requestedBy": agent, "title": f"{agent} asks",
+               "directory": str(body.get("directory") or "~"), "questions": items, "command": items[0]["question"],
+               "risk": "low", "createdAt": now, "expiresAt": now + timeout}
+        ev, holder = self.pending.add(req)
+        log(f"QUESTION {agent}: {items[0]['question'][:120]}")
+        notify(req)
+        timer = self.phone.schedule(req)
+        ev.wait(timeout=timeout)
+        self.pending.remove(req["id"])
+        self.phone.finished(req["id"], timer)
+        d = holder.get("decision") or {}
+        answers = d.get("answers") if d.get("type") == "answer" and isinstance(d.get("answers"), dict) else {}
+        log(f"  -> {'answered' if answers else 'left to the agent'}")
+        return {"answers": answers}
+
+    def notice(self, body):
+        """Non-blocking alert ("is waiting for you", "has a question"); shown for a few seconds."""
+        agent = str(body.get("agent") or "An agent")[:60]
+        title = str(body.get("title") or "is waiting for you")[:80]
+        message = str(body.get("message") or "")[:600]
+        now = time.time()
+        with self.notice_lock:
+            key = (agent, title, message)
+            if now - self.recent_notices.get(key, 0) < NOTICE_REPEAT_SECONDS:
+                return {"ok": True, "shown": False}
+            self.recent_notices = {k: t for k, t in self.recent_notices.items() if now - t < NOTICE_REPEAT_SECONDS}
+            self.recent_notices[key] = now
+        req = {"id": str(uuid.uuid4()).upper(), "kind": "notice", "requestedBy": agent, "title": f"{agent} {title}",
+               "message": message, "command": message, "directory": str(body.get("directory") or "~"),
+               "risk": "low", "createdAt": now, "expiresAt": now + NOTICE_SECONDS}
+        ev, _ = self.pending.add(req)
+        log(f"NOTICE {agent} {title}: {message[:100]}")
+        notify(req)
+        self.phone.notice(req)
+
+        def expire():
+            ev.wait(NOTICE_SECONDS)       # set early when dismissed on the card
+            self.pending.remove(req["id"])
+        threading.Thread(target=expire, daemon=True).start()
+        return {"ok": True, "shown": True}
+
+    def dispatch(self, body):
+        """One entry point for the socket and HTTP: permission request, question or notice."""
+        kind = body.get("kind") if isinstance(body, dict) else None
+        if kind == "question":
+            return self.question(body)
+        if kind == "notice":
+            return self.notice(body)
+        return self.ask(body if isinstance(body, dict) else {})
 
     def status(self):
         return {"status": "active", "port": self.port, "socket": self.unix_path if self._unix_ok() else None,
@@ -1000,11 +1205,11 @@ class Daemon:
                     buf += chunk
                 conn.settimeout(None)
                 body = json.loads(buf.split(b"\n", 1)[0].decode("utf-8") or "{}")
-                if isinstance(body, dict) and body.get("event") and not body.get("risk"):
+                if isinstance(body, dict) and body.get("event") and not body.get("risk") and not body.get("kind"):
                     self.last_event = body
                     resp = {"ok": True}
                 else:
-                    resp = self.ask(body if isinstance(body, dict) else {})
+                    resp = self.dispatch(body)
                 conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
             except Exception:
                 pass
@@ -1117,9 +1322,9 @@ class Daemon:
                     reqs = daemon.pending.all()
                     if qs.get("all"):
                         return self._send(200, {"hasPending": bool(reqs), "requests": reqs})
-                    if not reqs:
+                    r = daemon.pending.first()
+                    if not r:
                         return self._send(200, {"hasPending": False, "message": "No pending permissions"})
-                    r = reqs[0]
                     return self._send(200, dict(hasPending=True, **{k: r[k] for k in ("id", "title", "subtitle", "command", "risk", "requestedBy")}))
                 if u.path == "/audit/verify":
                     return self._send(200, daemon.store.verify())
@@ -1142,6 +1347,10 @@ class Daemon:
                     return self._send(401, {"error": "Unauthorized: Valid token required in X-Loggdin-Token or Authorization header"})
                 if u.path in ("/ask", "/hook"):
                     return self._send(200, daemon.ask(body))
+                if u.path == "/question":
+                    return self._send(200, daemon.question(body))
+                if u.path == "/notice":
+                    return self._send(200, daemon.notice(body))
                 if u.path in ("/allow", "/deny", "/decision"):
                     return self._decide(u.path, parse_qs(u.query), body)
                 if u.path == "/event":
@@ -1156,6 +1365,17 @@ class Daemon:
             def _decide(self, path, qs, body):
                 if not self._authorized(body):
                     return self._send(401, {"error": "Unauthorized"})
+                rid = body.get("requestId")
+                target = next((r for r in daemon.pending.all() if r["id"] == rid), None) if rid else None
+                if target and target.get("kind") in ("question", "notice"):
+                    # Questions take {"answers": {question: label}}; anything else ("terminal",
+                    # "dismiss") hands the question back to the agent / closes the notice.
+                    answers = body.get("answers")
+                    if target["kind"] == "question" and isinstance(answers, dict) and answers:
+                        dec = {"type": "answer", "answers": {str(k)[:600]: str(v)[:600] for k, v in answers.items()}}
+                    else:
+                        dec = {"type": "dismiss"}
+                    return self._send(200, {"success": daemon.pending.resolve(dec, rid), "decision": dec["type"]})
                 if path == "/deny":
                     d_str, s_str = "deny", None
                 elif path == "/allow":
@@ -1767,6 +1987,8 @@ class ApprovalCard:
         self.f_seg_sel = font(11.5, family=semi, bold=not semi)
         self.f_btn = font(13.5, family=semi, bold=not semi)
         self.f_hint = font(10, family=mono)
+        self.f_q = font(14)
+        self.f_opt = font(13, family=semi, bold=not semi)
 
         self.req, self.queue, self.done = None, [], []
         self.scope_i, self.details, self.copied, self.resolved = 0, False, False, None
@@ -1786,10 +2008,13 @@ class ApprovalCard:
         self.c = tk.Canvas(root, highlightthickness=0, bd=0, bg=bg)
         self.c.pack(fill="both", expand=True)
         for key, fn in (("<Return>", lambda e: self.key_allow()), ("<KP_Enter>", lambda e: self.key_allow()),
-                        ("<Escape>", lambda e: self.decide(False, keyboard=True)),
+                        ("<Escape>", lambda e: self.key_escape()),
                         ("<Left>", lambda e: self.step_scope(-1)), ("<Right>", lambda e: self.step_scope(1)),
                         ("<Tab>", lambda e: self.step_scope(1))):
             root.bind(key, fn)
+        for n in range(1, 7):     # number keys pick a question's option
+            root.bind(str(n), lambda e, n=n: self.key_digit(n))
+        self.q_index, self.q_answers, self.q_picked = 0, {}, set()
         if autostart:
             root.after(10, self.poll)
         root.after(50, self.tick)
@@ -1873,6 +2098,7 @@ class ApprovalCard:
     def show(self, req):
         first = not self.visible
         self.req, self.scope_i, self.details, self.copied, self.hold_start = req, 0, False, False, None
+        self.q_index, self.q_answers, self.q_picked = 0, {}, set()
         self.armed_at = time.time() + self.ARM_DELAY
         self.render()
         if first:
@@ -1885,11 +2111,18 @@ class ApprovalCard:
             root.deiconify()
             root.lift()
             root.attributes("-topmost", True)
-            try:
-                root.focus_force()
-            except Exception:
-                pass
+            # Questions and notices don't take keyboard focus until clicked, so stray key presses
+            # in another window can't answer them (same as the Mac card).
+            if self.kind == "permission":
+                try:
+                    root.focus_force()
+                except Exception:
+                    pass
             self.animate_in(0)
+
+    @property
+    def kind(self):
+        return (self.req or {}).get("kind", "permission")
 
     def animate_in(self, step, steps=9):
         t = (step + 1) / steps
@@ -1906,17 +2139,89 @@ class ApprovalCard:
 
     # -- actions --
     def key_allow(self):
-        if not self.high:
+        if self.kind == "question":
+            item = self.req["questions"][self.q_index]
+            if item["multiSelect"] and time.time() >= self.armed_at:
+                self.submit_multi()
+        elif self.kind == "permission" and not self.high:
             self.decide(True, keyboard=True)
 
+    def key_escape(self):
+        if time.time() < self.armed_at:
+            return
+        if self.kind == "question":
+            self.finish_question(None)
+        elif self.kind == "notice":
+            self.dismiss_notice()
+        else:
+            self.decide(False, keyboard=True)
+
+    def key_digit(self, n):
+        if self.kind == "question" and time.time() >= self.armed_at:
+            self.choose_option(n - 1)
+
+    # -- questions --
+    def choose_option(self, i):
+        if not self.req or self.resolved or self.kind != "question":
+            return
+        item = self.req["questions"][self.q_index]
+        if not 0 <= i < len(item["options"]):
+            return
+        if item["multiSelect"]:
+            self.q_picked ^= {i}
+            self.render()
+            return
+        self.record_answer([i])
+
+    def submit_multi(self):
+        if self.q_picked:
+            self.record_answer(sorted(self.q_picked))
+
+    def record_answer(self, picks):
+        """Same answer shape as the Mac: {question: label}, multiple picks joined with ', '."""
+        item = self.req["questions"][self.q_index]
+        self.q_answers[item["question"]] = ", ".join(item["options"][i]["label"] for i in picks)
+        if self.q_index + 1 < len(self.req["questions"]):
+            self.q_index += 1
+            self.q_picked = set()
+            self.render()
+        else:
+            self.finish_question(self.q_answers)
+
+    def finish_question(self, answers):
+        if not self.req or self.resolved:
+            return
+        body = {"requestId": self.req["id"]}
+        body.update({"answers": answers} if answers else {"decision": "terminal"})
+        try:
+            self.api("POST", "/decision", body)
+        except Exception:
+            pass
+        name = pill_for(self.req.get("requestedBy"))[0]
+        self.resolved = (f"✓  Answer sent to {name}", self.P["low"]) if answers else \
+            (f"Answer it in {name}", self.P["muted"])
+        self.done = (self.done + [self.req["id"]])[-50:]
+        self.render()
+        self.root.after(700, self.after_resolved)
+
+    def dismiss_notice(self):
+        if not self.req or self.resolved:
+            return
+        try:
+            self.api("POST", "/decision", {"requestId": self.req["id"], "decision": "dismiss"})
+        except Exception:
+            pass
+        self.done = (self.done + [self.req["id"]])[-50:]
+        self.after_resolved()
+
     def step_scope(self, d):
-        if self.req and not self.high and not self.resolved and time.time() >= self.armed_at:
+        if self.req and self.kind == "permission" and not self.high and not self.resolved and time.time() >= self.armed_at:
             self.scope_i = (self.scope_i + d) % len(CARD_SCOPES)
             self.render()
         return "break"
 
     def decide(self, allow, held=False, keyboard=False):
-        if not self.req or self.resolved or (keyboard and time.time() < self.armed_at):
+        if not self.req or self.resolved or self.kind != "permission" or (keyboard and time.time() < self.armed_at):
             return
         if allow and self.high and not held:
             return
@@ -2030,9 +2335,146 @@ class ApprovalCard:
             c.create_text(hx + hw / 2, cy, text=hint, fill=_mix(fg, fill, 0.8), font=self.f_hint, tags=(tag,))
         self.bind(tag, fn, bg, fill, hover)
 
+    # -- question & notice layouts --
+    def frame_start(self):
+        """Clear and draw the island capsule; returns (y, x0, x1)."""
+        c, px, W = self.c, self.px, self.W
+        c.delete("all")
+        self.hold_geom = None
+        y = px(9)
+        self.rrect(W / 2 - px(32), y, W / 2 + px(32), y + px(5), px(2.5), fill=self.P["island"], outline="")
+        return y + px(17), px(20), W - px(20)
+
+    def header(self, y, x0, x1, title, chips, accent):
+        c, P, px = self.c, self.P, self.px
+        name = pill_for(self.req.get("requestedBy"))[0]
+        self.ring_color = accent
+        orb = px(46)
+        c.create_oval(x0 + px(5), y + px(5), x0 + orb - px(5), y + orb - px(5), fill=_mix(accent, P["bg"], 0.2), outline="")
+        c.create_text(x0 + orb / 2, y + orb / 2, text=name[:1].upper(), fill=accent, font=self.f_orb)
+        c.create_oval(x0 + px(1), y + px(1), x0 + orb - px(1), y + orb - px(1), outline=P["ring_track"], width=px(2.5))
+        self.ring = c.create_arc(x0 + px(1), y + px(1), x0 + orb - px(1), y + orb - px(1), start=90,
+                                 extent=-359.9, style="arc", outline=accent, width=px(2.5))
+        tx = x0 + orb + px(14)
+        more = len([r for r in self.queue if r.get("id") != self.req["id"]])
+        qw = 0
+        if more:
+            qt = f"+{more} waiting"
+            qw = self.f_tiny.measure(qt) + px(10)
+            c.create_text(x1, y + px(4), anchor="ne", text=qt, fill=P["muted"], font=self.f_tiny)
+        c.create_text(tx, y + px(2), anchor="nw", fill=P["fg"], font=self.f_title,
+                      text=self.fit(self.f_title, title, x1 - tx - qw))
+        bx = tx
+        for text, col in chips:
+            bx = self.chip(bx, y + px(26), text, col) + px(6)
+        return y + orb + px(14)
+
+    def frame_end(self, y, accent, tint=0.06):
+        c, P, px, W = self.c, self.P, self.px, self.W
+        H = y + px(18)
+        bg = self.rrect(px(1), px(1), W - px(1), H - px(1), px(24), fill=_mix(accent, P["bg"], tint),
+                        outline=P["border"], width=max(1, px(1)))
+        c.tag_lower(bg)
+        if H != self.H:
+            self.H = H
+            if self.visible:
+                self.root.geometry(f"{W}x{H}+{(self.root.winfo_screenwidth() - W) // 2}+{self.top}")
+        c.config(width=W, height=H)
+
+    def render_question(self):
+        c, P, px, req = self.c, self.P, self.px, self.req
+        y, x0, x1 = self.frame_start()
+        name, col = pill_for(req.get("requestedBy"))
+        items = req["questions"]
+        item = items[self.q_index]
+        chips = [(name, col)]
+        if item.get("header"):
+            chips.append((item["header"], P["primary"]))
+        if len(items) > 1:
+            chips.append((f"{self.q_index + 1} of {len(items)}", P["muted"]))
+        y = self.header(y, x0, x1, f"{name} asks", chips, col)
+        t = c.create_text(x0 + px(2), y, anchor="nw", text=item["question"], fill=P["fg"], font=self.f_q,
+                          width=x1 - x0 - px(4))
+        y = c.bbox(t)[3] + px(12)
+        multi = item["multiSelect"]
+        for i, o in enumerate(item["options"]):
+            tag, picked = f"opt{i}", i in self.q_picked
+            lx = x0 + px(46)
+            lt = c.create_text(lx, y + px(10), anchor="nw", text=o["label"], fill=P["fg"], font=self.f_opt,
+                               width=x1 - lx - px(12), tags=(tag,))
+            bottom = c.bbox(lt)[3]
+            if o.get("description"):
+                dt = c.create_text(lx, bottom + px(2), anchor="nw", text=o["description"], fill=P["muted"],
+                                   font=self.f_tiny, width=x1 - lx - px(12), tags=(tag,))
+                bottom = c.bbox(dt)[3]
+            bottom += px(10)
+            row = self.rrect(x0, y, x1, bottom, px(12), fill=P["btn"],
+                             outline=P["primary"] if picked else P["btn_border"], width=px(2) if picked else 1, tags=(tag,))
+            c.tag_lower(row, lt)
+            bx, by = x0 + px(12), y + px(10)
+            if multi:
+                self.rrect(bx, by, bx + px(20), by + px(20), px(5), tags=(tag,),
+                           fill=P["primary"] if picked else P["bg"], outline=P["primary"] if picked else P["btn_border"])
+                if picked:
+                    c.create_text(bx + px(10), by + px(10), text="✓", fill="#ffffff", font=self.f_chip, tags=(tag,))
+            else:
+                self.rrect(bx, by, bx + px(22), by + px(20), px(5), fill=_mix(P["fg"], P["btn"], 0.1), outline="", tags=(tag,))
+                c.create_text(bx + px(11), by + px(10), text=str(i + 1), fill=P["muted"], font=self.f_hint, tags=(tag,))
+            if not self.resolved:
+                self.bind(tag, lambda i=i: self.choose_option(i), row, P["btn"], P["btn_hover"])
+            y = bottom + px(8)
+        y += px(4)
+        if self.resolved:
+            text, rc = self.resolved
+            c.create_text(self.W / 2, y + px(17), text=text, fill=rc, font=self.f_btn)
+            y += px(34)
+        else:
+            bh = px(40)
+            if multi:
+                gap = px(10)
+                bw = (x1 - x0 - gap) / 2
+                self.button(x0, y, x0 + bw, y + bh, f"Answer in {name}", "Esc", "b_pass",
+                            lambda: self.finish_question(None), False)
+                self.button(x0 + bw + gap, y, x1, y + bh, "Submit" if self.q_picked else "Pick one or more",
+                            "Enter" if self.q_picked else "", "b_submit", self.submit_multi, bool(self.q_picked))
+            else:
+                self.button(x0, y, x1, y + bh, f"Answer in {name} instead", "Esc", "b_pass",
+                            lambda: self.finish_question(None), False)
+            y += bh
+        self.frame_end(y, col)
+
+    def render_notice(self):
+        c, P, px, req = self.c, self.P, self.px, self.req
+        y, x0, x1 = self.frame_start()
+        name, col = pill_for(req.get("requestedBy"))
+        y = self.header(y, x0, x1, req.get("title") or f"{name} is waiting for you", [(name, col)], col)
+        inner, by = px(12), y
+        msg = str(req.get("message") or "")
+        if len(msg) > 400:
+            msg = msg[:399] + "…"
+        cy = by + inner
+        if msg:
+            t = c.create_text(x0 + inner, cy, anchor="nw", text=msg, fill=P["fg"], font=self.f_small, width=x1 - x0 - 2 * inner)
+            cy = c.bbox(t)[3] + px(6)
+        c.create_text(x0 + inner, cy, anchor="nw", fill=P["muted"], font=self.f_tiny,
+                      text="in " + self.fit(self.f_tiny, req.get("directory", "~"), x1 - x0 - 2 * inner - px(20), middle=True))
+        bottom = cy + px(16) + inner - px(4)
+        box = self.rrect(x0, by, x1, bottom, px(13), fill=P["box"], outline=P["box_border"])
+        c.tag_lower(box)
+        y = bottom + px(10)
+        self.small_btn(x1, y, "Dismiss", "b_dismiss", self.dismiss_notice)
+        c.create_text(x0 + px(2), y + px(9), anchor="w", fill=P["muted"], font=self.f_tiny,
+                      text=f"Switch to {name} to answer.")
+        y += px(19)
+        self.frame_end(y, col)
+
     def render(self):
         if not self.req:
             return
+        if self.kind == "question":
+            return self.render_question()
+        if self.kind == "notice":
+            return self.render_notice()
         c, P, px, req = self.c, self.P, self.px, self.req
         c.delete("all")
         self.hold_geom = None

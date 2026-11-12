@@ -51,15 +51,22 @@ class CrossPlatformDaemonTest(unittest.TestCase):
                        HOME=cls.home, USERPROFILE=cls.home, APPDATA=os.path.join(cls.home, "AppData"),
                        XDG_CONFIG_HOME=os.path.join(cls.home, ".config"), PYTHONIOENCODING="utf-8")
         cls.env.pop("LOGGDIN_TOKEN", None)
+        # Log to a file, not a pipe: nobody reads a pipe while the tests run, and once its small
+        # buffer (a few KB on Windows) fills, the daemon blocks on its next log line and every
+        # later test times out.
+        cls.log_path = os.path.join(cls.tmp, "daemon.log")
+        cls.log_file = open(cls.log_path, "wb")
         cls.proc = subprocess.Popen([sys.executable, DAEMON, "daemon"], env=cls.env,
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                    stdout=cls.log_file, stderr=subprocess.STDOUT)
         for _ in range(100):
             if cls._status_code() == 200:
                 break
             time.sleep(0.1)
         else:
             cls.proc.kill()
-            raise RuntimeError("daemon did not start:\n" + cls.proc.stdout.read().decode(errors="replace"))
+            cls.log_file.close()
+            with open(cls.log_path, "rb") as f:
+                raise RuntimeError("daemon did not start:\n" + f.read().decode(errors="replace"))
         with open(os.path.join(cls.state, "token")) as f:
             cls.token = f.read().strip()
 
@@ -70,8 +77,7 @@ class CrossPlatformDaemonTest(unittest.TestCase):
             cls.proc.wait(timeout=10)
         except Exception:
             cls.proc.kill()
-        if cls.proc.stdout:
-            cls.proc.stdout.close()
+        cls.log_file.close()
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     # -- helpers --
@@ -246,6 +252,80 @@ class CrossPlatformDaemonTest(unittest.TestCase):
         th.join(30)
         self.assertEqual(done["r"].returncode, 0, done["r"].stdout + done["r"].stderr)
         self.assertIn("deny", done["r"].stdout)
+
+    # -- agent questions and "waiting for you" notices --
+    QUESTION = {"question": "Which database?", "header": "DB", "multiSelect": False,
+                "options": [{"label": "Postgres", "description": "server"}, {"label": "SQLite", "description": ""}]}
+
+    def wait_kind(self, kind, timeout=10):
+        end = time.time() + timeout
+        while time.time() < end:
+            items = [r for r in self.req("GET", "/pending?all=1")[1]["requests"] if r.get("kind") == kind]
+            if items:
+                return items[0]
+            time.sleep(0.05)
+        return None
+
+    def test_claude_question_answered_through_the_hook(self):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "cwd": self.home,
+                   "tool_input": {"questions": [self.QUESTION]}}
+        out = {}
+        th = threading.Thread(target=lambda: out.update(r=subprocess.run(
+            [sys.executable, HOOK, "--agent", "claude-code", "--ask"], input=json.dumps(payload), env=self.env,
+            capture_output=True, text=True, timeout=60)))
+        th.start()
+        q = self.wait_kind("question")
+        self.assertIsNotNone(q, "question reached loggdin")
+        self.assertEqual(q["questions"][0]["options"][1]["label"], "SQLite")
+        # CLI-style allow/deny (no request id) must never answer a question
+        self.assertFalse(self.req("POST", "/decision", {"decision": "allow"})[1]["success"])
+        self.req("POST", "/decision", {"requestId": q["id"], "answers": {"Which database?": "SQLite"}})
+        th.join(30)
+        o = json.loads(out["r"].stdout.strip().splitlines()[-1])
+        self.assertEqual(o["hookSpecificOutput"]["permissionDecision"], "allow")
+        self.assertEqual(o["hookSpecificOutput"]["updatedInput"]["answers"], {"Which database?": "SQLite"})
+
+    def test_question_answered_in_terminal_returns_nothing(self):
+        out = {}
+        th = threading.Thread(target=lambda: out.update(r=self.req(
+            "POST", "/question", {"agent": "Codex", "questions": [self.QUESTION], "timeout": 20}, timeout=30)[1]))
+        th.start()
+        q = self.wait_kind("question")
+        self.req("POST", "/decision", {"requestId": q["id"], "decision": "terminal"})
+        th.join(30)
+        self.assertEqual(out["r"], {"answers": {}})
+        self.assertEqual(self.req("POST", "/question", {"agent": "x", "questions": []})[1], {"answers": {}})
+
+    def test_notice_shown_once_dismissable_and_expires(self):
+        body = {"agent": "Claude Code", "title": "is waiting for you", "message": f"notice-{time.time()}"}
+        self.assertTrue(self.req("POST", "/notice", body)[1]["shown"])
+        self.assertFalse(self.req("POST", "/notice", body)[1]["shown"], "same alert within 30 s is not repeated")
+        n = self.wait_kind("notice")
+        self.assertEqual(n["title"], "Claude Code is waiting for you")
+        self.assertFalse(self.req("GET", "/pending")[1]["hasPending"], "notices are not permission requests")
+        self.req("POST", "/decision", {"requestId": n["id"], "decision": "dismiss"})
+        end = time.time() + 5
+        while time.time() < end and self.wait_kind("notice", timeout=0.1):
+            time.sleep(0.05)
+        self.assertIsNone(self.wait_kind("notice", timeout=0.1))
+
+    def test_waiting_alert_and_other_agent_question_reach_loggdin(self):
+        msg = f"Claude needs your input {time.time()}"
+        r = subprocess.run([sys.executable, HOOK, "--agent", "claude-code", "Notification"], env=self.env, timeout=30,
+                           input=json.dumps({"hook_event_name": "Notification", "notification_type": "idle_prompt",
+                                             "message": msg}), capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "")
+        n = self.wait_kind("notice")
+        self.assertEqual(n["message"], msg)
+        self.req("POST", "/decision", {"requestId": n["id"], "decision": "dismiss"})
+        time.sleep(0.3)
+        r = subprocess.run([sys.executable, HOOK, "--agent", "antigravity", "PreToolUse"], env=self.env, timeout=30,
+                           input=json.dumps({"toolCall": {"name": "ask_question", "args": {"question": "Deploy now?"}}}),
+                           capture_output=True, text=True)
+        self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1]), {"decision": "allow"})
+        n = self.wait_kind("notice")
+        self.assertEqual((n["title"], n["message"]), ("Antigravity has a question", "Deploy now?"))
+        self.req("POST", "/decision", {"requestId": n["id"], "decision": "dismiss"})
 
     def test_windows_wipe_commands_are_catastrophic(self):
         lg = load_module()

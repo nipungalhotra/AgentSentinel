@@ -557,9 +557,9 @@ def send_via_http(payload, port=None, timeout=120, path='/ask'):
         return None
 
 # ---------------------------------------------------------------------------------------------
-# Agent questions and "needs your input" alerts (macOS app only for now)
+# Agent questions and "needs your input" alerts (Mac app, and loggdin.py on Windows / Linux)
 #
-# Claude Code's AskUserQuestion is shown in loggdin (notch card, or loggdin Pocket when away) and
+# Claude Code's AskUserQuestion is shown in loggdin (notch card or the Windows/Linux card, or loggdin Pocket when away) and
 # the chosen answer goes back through PreToolUse `updatedInput.answers`, which Claude Code accepts
 # as the user's answer. "Answer in terminal", a timeout or no loggdin app falls back to the
 # agent's own question box. Antigravity's hook contract only allows allow/deny, so its questions
@@ -591,6 +591,15 @@ def _question_items(tool_input):
     return items
 
 
+def _send_kind(obj, path, timeout):
+    """Question / notice to loggdin: the Mac app over its socket; loggdin.py over its socket
+    (Linux) or HTTP (Windows has no Unix socket)."""
+    resp = send_via_socket(obj, SOCKET_PATH, timeout=timeout)
+    if resp is None and sys.platform != 'darwin':
+        resp = send_via_http(obj, timeout=timeout, path=path)
+    return resp
+
+
 def handle_agent_question(agent, event, payload, is_ask_mode):
     tool_input = payload.get('tool_input') or payload.get('toolCall', {}).get('args') or {}
     if agent == 'claude-code':
@@ -598,25 +607,25 @@ def handle_agent_question(agent, event, payload, is_ask_mode):
             # The question box itself is the user interaction: let it through.
             _emit({'hookSpecificOutput': {'hookEventName': 'PermissionRequest', 'decision': {'behavior': 'allow'}}})
             return
-        if not (is_ask_mode and event == 'PreToolUse') or sys.platform != 'darwin':
+        if not (is_ask_mode and event == 'PreToolUse'):
             return  # only the dedicated AskUserQuestion hook asks loggdin; others stay silent
         items = _question_items(tool_input)
         if not items:
             return
-        resp = send_via_socket({'kind': 'question', 'agent': _agent_display(agent),
-                                'directory': resolve_directory(payload), 'questions': items}, SOCKET_PATH, timeout=125)
+        resp = _send_kind({'kind': 'question', 'agent': _agent_display(agent),
+                           'directory': resolve_directory(payload), 'questions': items}, '/question', 125)
         answers = (resp or {}).get('answers')
         if isinstance(answers, dict) and answers:
             _emit({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow',
                                           'updatedInput': dict(tool_input, answers=answers)}})
         return  # no answer: Claude Code shows its own question box
     # Other agents (Antigravity, ...): show the question as a notice, then let their own UI ask.
-    if sys.platform == 'darwin' and event in ('PreToolUse', 'PermissionRequest'):
+    if event in ('PreToolUse', 'PermissionRequest'):
         items = _question_items(tool_input)
         text = items[0]['question'] if items else (tool_input.get('question') or tool_input.get('prompt') or '')
         if isinstance(text, str) and text.strip():
-            send_via_socket({'kind': 'notice', 'agent': _agent_display(agent), 'directory': resolve_directory(payload),
-                             'title': 'has a question', 'message': text.strip()[:600]}, SOCKET_PATH, timeout=3)
+            _send_kind({'kind': 'notice', 'agent': _agent_display(agent), 'directory': resolve_directory(payload),
+                        'title': 'has a question', 'message': text.strip()[:600]}, '/notice', 3)
     _emit_allow(agent, event)
 
 
@@ -634,14 +643,12 @@ def _emit_allow(agent, event):
 
 
 def handle_agent_notification(agent, payload):
-    if sys.platform != 'darwin':
-        return
     ntype = payload.get('notification_type') or payload.get('type') or ''
     if ntype and ntype not in QUESTION_NOTIFICATION_TYPES:
         return
     message = payload.get('message') or 'Waiting for your input'
-    send_via_socket({'kind': 'notice', 'agent': _agent_display(agent), 'directory': resolve_directory(payload),
-                     'title': 'is waiting for you', 'message': str(message)[:600]}, SOCKET_PATH, timeout=3)
+    _send_kind({'kind': 'notice', 'agent': _agent_display(agent), 'directory': resolve_directory(payload),
+                'title': 'is waiting for you', 'message': str(message)[:600]}, '/notice', 3)
 
 
 def respond(agent, event, allowed, message=None, updated_permissions=None):

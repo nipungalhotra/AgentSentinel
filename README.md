@@ -112,6 +112,11 @@ Use `--no-agents` / `-NoAgents` to skip that step, and `--uninstall` / `-Uninsta
 
 Set `LOGGDIN_HOME` to use a different state folder. Node.js is only needed for the MCP integration.
 
+The card also shows agent questions and alerts, as on the Mac: Claude Code's questions
+(AskUserQuestion) appear with their options (number keys pick one, Esc hands the question back to
+Claude Code), and "waiting for you" alerts or other agents' questions show for a few seconds. With
+phone approvals on, single-choice questions get one button per option on your phone too.
+
 Try the card with `loggdin test` (or `loggdin test cursor` for a high-risk one); demo requests are
 never executed. Keys: Enter allows, Esc denies, ←/→ or Tab change the scope. The card follows the
 Windows light/dark app theme; set `LOGGDIN_THEME=light|dark` to override, or `LOGGDIN_POPUP=0` to

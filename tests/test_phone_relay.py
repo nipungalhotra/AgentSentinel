@@ -164,6 +164,15 @@ class PhoneProtocolTest(unittest.TestCase):
         self.assertIsNone(self.m.phone_open(self.cfg, "hello"))
         self.assertNotEqual(sealed, self.m.phone_seal(self.cfg, {"t": "x", "m": "rm -rf build", "a": [["Deny", "lg1 A deny 0"]]}))
 
+    def test_question_option_reply_parses_and_rejects_forgery(self):
+        sig = self.m.phone_sig(self.cfg["secret"], "Q-1", "opt-2")
+        self.assertEqual(self.m.phone_parse_option(self.cfg, f"lg1 Q-1 opt-2 {sig}"), ("Q-1", 2))
+        for text in (f"lg1 Q-1 opt-3 {sig}", f"lg1 Q-2 opt-2 {sig}", "lg1 Q-1 opt-2 0000", f"lg1 Q-1 opt-12 {sig}",
+                     f"lg1 Q-1 deny {sig}", ""):
+            self.assertIsNone(self.m.phone_parse_option(self.cfg, text), text)
+        # an option reply is never mistaken for an allow/deny reply
+        self.assertIsNone(self.m.phone_parse_reply(self.cfg, f"lg1 Q-1 opt-2 {sig}"))
+
     def test_signature_matches_swift_vector(self):
         # Same vector is produced by Sources/PhoneRelay.swift (CryptoKit HMAC-SHA256, 32 hex chars).
         self.assertEqual(self.m.phone_sig("abc123secret", "BB3A26FF-8E69", "allow-10m"), "7ca1291cc8499d13512e776bfd55e813")
@@ -255,6 +264,43 @@ class PhoneRelayEndToEndTest(unittest.TestCase):
         t = threading.Thread(target=run)
         t.start()
         return t, result
+
+    def post_async(self, path, body):
+        result = {}
+
+        def run():
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json", "X-Loggdin-Token": self.token})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                result["r"] = json.loads(r.read())
+        t = threading.Thread(target=run)
+        t.start()
+        return t, result
+
+    def test_question_tap_option_answers_on_the_computer(self):
+        n0 = len(self.ntfy.published)
+        q = {"question": "Which database?", "header": "DB", "multiSelect": False,
+             "options": [{"label": "Postgres"}, {"label": "SQLite"}]}
+        t, result = self.post_async("/question", {"agent": "Claude Code", "directory": "/tmp/api", "questions": [q], "timeout": 30})
+        self.assertTrue(self.ntfy.wait_published(n0 + 1))
+        opened = self.m.phone_open(self.cfg, self.ntfy.published[n0]["message"])
+        self.assertEqual(opened["k"], "q")
+        self.assertEqual([a[0] for a in opened["a"]], ["Postgres", "SQLite"])
+        self.assertIn("Which database?", opened["m"])
+        self.ntfy.tap(opened, "SQLite", self.cfg)
+        t.join(20)
+        self.assertEqual(result["r"], {"answers": {"Which database?": "SQLite"}})
+
+    def test_multi_question_has_no_buttons_on_the_phone(self):
+        n0 = len(self.ntfy.published)
+        qs = [{"question": f"Q{i}?", "options": [{"label": "a"}, {"label": "b"}]} for i in range(2)]
+        t, result = self.post_async("/question", {"agent": "Claude Code", "questions": qs, "timeout": 3})
+        self.assertTrue(self.ntfy.wait_published(n0 + 1))
+        opened = self.m.phone_open(self.cfg, self.ntfy.published[n0]["message"])
+        self.assertEqual(opened["a"], [])
+        self.assertIn("Answer this one on your computer", opened["m"])
+        t.join(20)
+        self.assertEqual(result["r"], {"answers": {}})
 
     def test_tap_allow_10m_resolves_and_clears(self):
         n0 = len(self.ntfy.published)

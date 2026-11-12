@@ -31,10 +31,11 @@ run_test "Python SDK (sentinel.py & loggdin.py)" python3 tests/test_sdk_python.p
 run_test "Node.js SDK (sentinel.js)" node tests/test_sdk_node.js
 run_test "MCP Server Protocol & Tools" python3 tests/test_mcp_server.py
 run_test "Cross-platform Daemon (Windows/Linux)" python3 tests/test_crossplatform_daemon.py
+run_test "Phone Approvals & Agent Questions" python3 tests/test_phone_relay.py
 
 echo ""
 if [[ $FAILED_TESTS -eq 0 ]]; then
-  echo "🎉 ALL TEST SUITES PASSED CLEANLY! (7/7 suites successful)"
+  echo "🎉 ALL TEST SUITES PASSED CLEANLY! (8/8 suites successful)"
   exit 0
 else
   echo "⚠️ TEST SUITE FAILED with ${FAILED_TESTS} failures."
