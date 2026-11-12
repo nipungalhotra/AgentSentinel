@@ -20,6 +20,8 @@ export type PhoneRequest = {
   /** When the computer sent it, in ms. */
   at: number;
   high: boolean;
+  /** permission: allow/deny a command; question: pick an option; notice: nothing to answer. */
+  kind: 'permission' | 'question' | 'notice';
   actions: ReplyAction[];
 };
 
@@ -63,7 +65,7 @@ export async function sendReply(action: ReplyAction): Promise<boolean> {
   }
 }
 
-type Sealed = { t?: unknown; m?: unknown; h?: unknown; a?: unknown };
+type Sealed = { k?: unknown; t?: unknown; m?: unknown; h?: unknown; a?: unknown };
 
 /** Requests arrive sealed; only the pairing key from the QR code or pairing code opens them. */
 function toRequest(msg: any, p: Pairing): PhoneRequest | null | 'locked' {
@@ -75,13 +77,15 @@ function toRequest(msg: any, p: Pairing): PhoneRequest | null | 'locked' {
     const actions: ReplyAction[] = s.a
       .filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string')
       .map(([label, body]) => ({ label, body, method: 'POST', url: `${p.server}/${p.topic}-reply` }));
-    if (!actions.length) return null;
+    const kind = s.k === 'q' ? 'question' : s.k === 'n' ? 'notice' : 'permission';
+    if (!actions.length && kind === 'permission') return null;
     return {
       seq: String(msg.sequence_id ?? msg.id),
       title: typeof s.t === 'string' ? s.t : 'Permission request',
       message: s.m,
       at: typeof msg.time === 'number' ? msg.time * 1000 : Date.now(),
       high: s.h === true,
+      kind,
       actions,
     };
   }
@@ -96,6 +100,7 @@ function toRequest(msg: any, p: Pairing): PhoneRequest | null | 'locked' {
     message: msg.message,
     at: typeof msg.time === 'number' ? msg.time * 1000 : Date.now(),
     high: msg.priority === 5,
+    kind: 'permission',
     actions,
   };
 }

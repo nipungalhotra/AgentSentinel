@@ -29,6 +29,7 @@ const STORE_KEY = 'loggdin.pairing';
 const REQUEST_LIFETIME_MS = 110_000;
 
 type HistoryItem = { key: string; allowed: boolean; label: string; command: string; at: number };
+type AgentNotice = { key: string; title: string; message: string; at: number };
 
 export default function App() {
   const t = useTheme();
@@ -224,6 +225,7 @@ const isDeny = (label: string) => label.toLowerCase().startsWith('deny');
 function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () => void }) {
   const t = useTheme();
   const [requests, setRequests] = useState<PhoneRequest[]>([]);
+  const [notices, setNotices] = useState<AgentNotice[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [online, setOnline] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
@@ -243,8 +245,18 @@ function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () 
   useEffect(() => {
     const handlers = {
       onStatus: setOnline,
-      onRequest: (r: PhoneRequest) =>
-        setRequests((list) => (answered.current.has(r.seq) ? list : [r, ...list.filter((x) => x.seq !== r.seq)])),
+      onRequest: (r: PhoneRequest) => {
+        if (r.kind === 'notice') {
+          // Recent notices only: the relay replays the last two minutes on reconnect.
+          if (Date.now() - r.at > 10 * 60_000) return;
+          const [message] = r.message.split('\n');
+          setNotices((list) =>
+            list.some((n) => n.key === r.seq) ? list : [{ key: r.seq, title: r.title, message, at: r.at }, ...list].slice(0, 5),
+          );
+          return;
+        }
+        setRequests((list) => (answered.current.has(r.seq) ? list : [r, ...list.filter((x) => x.seq !== r.seq)]));
+      },
       onClear: (seq: string) => setRequests((list) => list.filter((x) => x.seq !== seq)),
       onLocked: () =>
         setError('A request arrived that this phone can\u2019t open. Pair again with the QR code or the pairing code.'),
@@ -290,13 +302,13 @@ function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () 
     }
     answered.current.add(request.seq);
     setRequests((list) => list.filter((x) => x.seq !== request.seq));
-    const deny = isDeny(action.label);
+    const deny = request.kind === 'permission' && isDeny(action.label);
     setHistory((list) =>
       [
         {
           key: request.seq,
           allowed: !deny,
-          label: deny ? 'Denied' : action.label.replace(/^Allow/, 'Allowed'),
+          label: request.kind === 'question' ? `Answered \u201c${action.label}\u201d` : deny ? 'Denied' : action.label.replace(/^Allow/, 'Allowed'),
           command: request.message.split('\n')[0],
           at: Date.now(),
         },
@@ -316,6 +328,23 @@ function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () 
       </View>
 
       {error ? <Notice text={error} /> : null}
+
+      {notices.map((n) => (
+        <Recess key={n.key} style={styles.noticeCard}>
+          <View style={styles.noticeHead}>
+            <Lamp state="warn" />
+            <Text style={[styles.term, { color: t.ink, flex: 1 }]}>{n.title}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+              hitSlop={12}
+              onPress={() => setNotices((list) => list.filter((x) => x.key !== n.key))}>
+              <Text style={[styles.dismiss, { color: t.ink2 }]}>Dismiss</Text>
+            </Pressable>
+          </View>
+          <Text style={[styles.sourceText, { color: t.ink2 }]}>{n.message}</Text>
+        </Recess>
+      ))}
 
       {requests.length === 0 ? (
         <View style={styles.intro}>
@@ -410,8 +439,10 @@ function RequestPlate({
   const seconds = Math.ceil(left / 1000);
   const urgent = seconds <= 15;
   const [command, ...rest] = request.message.split('\n');
-  const agent = request.title.replace(/\s+needs permission.*$/i, '') || 'An agent';
-  const rawFolder = rest.join(' ').replace(/^Folder:\s*/i, '').trim();
+  const agent = request.title.replace(/\s+(needs permission|asks).*$/i, '') || 'An agent';
+  const isQuestion = request.kind === 'question';
+  const rawFolder = (rest[0] ?? '').replace(/^Folder:\s*/i, '').trim();
+  const hint = rest.slice(1).join(' ');
   const folder = rawFolder === '~' ? 'your home folder' : rawFolder;
 
   return (
@@ -423,7 +454,7 @@ function RequestPlate({
       <Faceplate style={styles.plate}>
         <View style={styles.plateHead}>
           <Text accessibilityRole="header" style={[styles.title, { color: t.ink }]}>
-            {agent} asks to run
+            {isQuestion ? `${agent} asks` : `${agent} asks to run`}
           </Text>
           {request.high ? (
             <View style={[styles.risk, { backgroundColor: t.lampRed }]}>
@@ -432,11 +463,15 @@ function RequestPlate({
           ) : null}
         </View>
 
-        <Recess style={styles.commandWell}>
-          <Text style={[styles.command, { color: t.ink }]} selectable>
-            {command}
-          </Text>
-        </Recess>
+        {isQuestion ? (
+          <Text style={[styles.question, { color: t.ink }]}>{command}</Text>
+        ) : (
+          <Recess style={styles.commandWell}>
+            <Text style={[styles.command, { color: t.ink }]} selectable>
+              {command}
+            </Text>
+          </Recess>
+        )}
 
         <View style={styles.meta}>
           <Text style={[styles.metaText, { color: t.ink2 }]} numberOfLines={1}>
@@ -457,12 +492,14 @@ function RequestPlate({
           />
         </View>
 
+        {hint ? <Text style={[styles.metaText, { color: t.ink2 }]}>{hint}</Text> : null}
+
         <View style={styles.keys}>
           {request.actions.map((a, i) => (
             <Key
               key={a.label}
               label={a.label}
-              kind={isDeny(a.label) ? 'ink' : i === 0 ? 'signal' : 'plate'}
+              kind={isQuestion ? 'plate' : isDeny(a.label) ? 'ink' : i === 0 ? 'signal' : 'plate'}
               disabled={busy}
               onPress={() => onAnswer(i)}
             />
@@ -512,6 +549,10 @@ const styles = StyleSheet.create({
   risk: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
   riskText: { fontFamily: font.legend, fontSize: 13, color: '#ffffff' },
   commandWell: { padding: 14 },
+  question: { fontFamily: font.medium, fontSize: 17, lineHeight: 24 },
+  noticeCard: { padding: 2 * u, gap: 6 },
+  noticeHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dismiss: { fontFamily: font.medium, fontSize: 14, textDecorationLine: 'underline' },
   command: { fontFamily: font.mono, fontSize: 15, lineHeight: 22 },
   meta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   metaText: { fontFamily: font.body, fontSize: 15, flexShrink: 1 },

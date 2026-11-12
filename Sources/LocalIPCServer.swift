@@ -548,6 +548,35 @@ final class LocalIPCServer {
             return
         }
 
+        // Agent questions and "waiting for you" notices from sentinel-hook.
+        if let data = bodyString.data(using: .utf8),
+           let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+           let kind = obj["kind"] as? String {
+            if kind == "notice" {
+                Task { @MainActor in
+                    NoticeController.shared.show(agent: (obj["agent"] as? String) ?? "An agent",
+                                                 title: (obj["title"] as? String) ?? "is waiting for you",
+                                                 message: (obj["message"] as? String) ?? "",
+                                                 directory: (obj["directory"] as? String) ?? "~")
+                }
+                let ok = "{\"ok\":true}\n"
+                _ = ok.withCString { Darwin.send(fd, $0, strlen($0), 0) }
+                Darwin.close(fd)
+                return
+            }
+            if kind == "question" {
+                Task { @MainActor in
+                    var answers: [String: String]? = nil
+                    if let q = AgentQuestion(json: obj) { answers = await QuestionController.shared.ask(q) }
+                    let body = (try? JSONSerialization.data(withJSONObject: ["answers": answers ?? [:]])) ?? Data("{}".utf8)
+                    let line = body + Data("\n".utf8)
+                    line.withUnsafeBytes { ptr in _ = Darwin.send(fd, ptr.baseAddress, line.count, 0) }
+                    Darwin.close(fd)
+                }
+                return
+            }
+        }
+
         // Activity notifications from sentinel-hook (SessionStart, PostToolUse, Stop, ...) carry an
         // "event" key and no "risk". They are not permission requests: acknowledge immediately
         // instead of queueing a popup and making the agent wait on the hook's socket timeout.

@@ -268,6 +268,86 @@ final class PhoneRelay {
         return diff == 0 ? (parts[1], decision) : nil
     }
 
+    /// "lg1 <id> opt-<n> <sig>": an option tapped for an agent question.
+    nonisolated static func parseOptionReply(_ text: String, secret: String) -> (id: String, option: Int)? {
+        let parts = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.count == 4, parts[0] == "lg1", parts[2].hasPrefix("opt-"),
+              let n = Int(parts[2].dropFirst(4)), (0..<10).contains(n) else { return nil }
+        let expected = Array(signature(secret: secret, requestId: parts[1], verb: parts[2]).utf8)
+        let given = Array(parts[3].utf8)
+        guard expected.count == given.count else { return nil }
+        var diff: UInt8 = 0
+        for i in expected.indices { diff |= expected[i] ^ given[i] }
+        return diff == 0 ? (parts[1], n) : nil
+    }
+
+    // MARK: Agent questions and notices (called by QuestionController / NoticeController)
+
+    private var pushedQuestions: [String: PhoneConfig] = [:]
+
+    func questionPresented(_ q: AgentQuestion, forceNow: Bool = false) {
+        guard isActive, let cfg = config else { return }
+        let delay = (forceNow || userAway || cfg.mode != "auto") ? 0 : cfg.pushAfter
+        Task { @MainActor in
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard QuestionController.shared.isAsking(id: q.id), let cfg = self.config, cfg.enabled else { return }
+            if await Self.publishQuestion(cfg, q) { self.pushedQuestions[q.id] = cfg }
+        }
+    }
+
+    func questionFinished(_ q: AgentQuestion) {
+        guard let cfg = pushedQuestions.removeValue(forKey: q.id) else { return }
+        Task { await Self.send(method: "PUT", url: "\(cfg.serverURL)/\(cfg.topic)/\(Self.sequenceId(q.id))/clear", body: nil) }
+    }
+
+    func noticePresented(agent: String, title: String, message: String, directory: String) {
+        guard isActive, let cfg = config, cfg.mode != "auto" || userAway else { return }
+        Task { await Self.publishNotice(cfg, agent: agent, title: title, message: message, directory: directory) }
+    }
+
+    nonisolated private static func folderName(_ directory: String) -> String {
+        let last = (directory as NSString).lastPathComponent
+        return last.isEmpty || directory == "~" ? "your home folder" : last
+    }
+
+    /// Single-question requests carry one signed button per option; longer ones say to answer on the computer.
+    nonisolated private static func publishQuestion(_ cfg: PhoneConfig, _ q: AgentQuestion) async -> Bool {
+        let item = q.items[0]
+        let actions: [[String]] = q.items.count == 1 && !item.multiSelect
+            ? item.options.prefix(6).enumerated().map { i, o in
+                [o.label, "lg1 \(q.id) opt-\(i) \(signature(secret: cfg.secret, requestId: q.id, verb: "opt-\(i)"))"]
+            }
+            : []
+        let folder = folderName(q.directory)
+        let more = actions.isEmpty ? "\nAnswer this one on your computer." : ""
+        guard let sealed = seal(["k": "q", "t": "\(q.agent) asks", "m": "\(item.question)\nFolder: \(folder)\(more)",
+                                 "h": false, "a": actions], secret: cfg.secret) else { return false }
+        return await deliver(cfg, sealed: sealed, seq: sequenceId(q.id), priority: 4,
+                             expoTitle: "\(q.agent) has a question", expoBody: "In \(folder). Open loggdin to answer.")
+    }
+
+    nonisolated private static func publishNotice(_ cfg: PhoneConfig, agent: String, title: String, message: String, directory: String) async {
+        let folder = folderName(directory)
+        guard let sealed = seal(["k": "n", "t": "\(agent) \(title)", "m": "\(message)\nFolder: \(folder)", "a": [[String]]()],
+                                secret: cfg.secret) else { return }
+        _ = await deliver(cfg, sealed: sealed, seq: "lg-n" + String(UUID().uuidString.lowercased().filter { $0.isHexDigit }.prefix(20)),
+                          priority: 3, expoTitle: "\(agent) \(title)", expoBody: "In \(folder).")
+    }
+
+    nonisolated private static func deliver(_ cfg: PhoneConfig, sealed: String, seq: String, priority: Int,
+                                            expoTitle: String, expoBody: String) async -> Bool {
+        let payload: [String: Any] = ["topic": cfg.topic, "title": "loggdin", "message": sealed,
+                                      "priority": priority, "tags": ["speech_balloon"], "sequence_id": seq]
+        let ok = await send(method: "POST", url: cfg.serverURL + "/", body: try? JSONSerialization.data(withJSONObject: payload))
+        guard !cfg.pushTokens.isEmpty else { return ok }
+        let messages: [[String: Any]] = cfg.pushTokens.map {
+            ["to": $0, "title": expoTitle, "body": expoBody, "sound": "default", "priority": "high",
+             "channelId": "requests", "ttl": 110, "data": ["seq": seq]]
+        }
+        let delivered = await send(method: "POST", url: expoPushURL, body: try? JSONSerialization.data(withJSONObject: messages))
+        return ok || delivered
+    }
+
     // MARK: Request lifecycle (called by PermissionPopupController)
 
     /// The Mac counts as away when the screen is locked or there has been no input for a minute.
@@ -429,6 +509,10 @@ final class PhoneRelay {
                     guard let text = obj["message"] as? String else { continue }
                     if let token = parsePushRegistration(text, secret: cfg.secret) {
                         await MainActor.run { PhoneRelay.shared.registerPushToken(token) }
+                        continue
+                    }
+                    if let pick = parseOptionReply(text, secret: cfg.secret) {
+                        await MainActor.run { _ = QuestionController.shared.submitFromPhone(id: pick.id, option: pick.option) }
                         continue
                     }
                     guard let reply = parseReply(text, secret: cfg.secret) else { continue }
