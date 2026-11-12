@@ -52,6 +52,24 @@ mkdir -p "$APP_BUNDLE/Contents/Resources/bin"
 cp "$RELEASE_BIN" "$APP_BUNDLE/Contents/MacOS/loggdin"
 chmod 755 "$APP_BUNDLE/Contents/MacOS/loggdin"
 
+# SwiftPM's default "swiftbuild" engine stamps the binary's SDK version with the deployment target
+# (sdk 14.0) instead of the real SDK. macOS reads that stamp to pick the app's look, so a 14.0 stamp
+# silently turns off Liquid Glass on macOS 26+ (flat, opaque card). Stamp the real SDK version.
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+MIN_OS="$(otool -arch arm64 -l "$APP_BUNDLE/Contents/MacOS/loggdin" | awk '/LC_BUILD_VERSION/{f=1} f&&/minos/{print $2; exit}')"
+vtool -set-build-version macos "${MIN_OS:-14.0}" "$SDK_VERSION" -replace \
+      -output "$APP_BUNDLE/Contents/MacOS/loggdin.stamped" "$APP_BUNDLE/Contents/MacOS/loggdin"
+mv "$APP_BUNDLE/Contents/MacOS/loggdin.stamped" "$APP_BUNDLE/Contents/MacOS/loggdin"
+chmod 755 "$APP_BUNDLE/Contents/MacOS/loggdin"
+for arch in arm64 x86_64; do
+    STAMP="$(otool -arch "$arch" -l "$APP_BUNDLE/Contents/MacOS/loggdin" | awk '/LC_BUILD_VERSION/{f=1} f&&/ sdk /{print $2; exit}')"
+    if [ "${STAMP%%.*}" -lt 26 ]; then
+        echo "❌ Error: $arch binary is stamped with SDK $STAMP; Liquid Glass needs 26 or newer."
+        exit 1
+    fi
+done
+echo "✓ Stamped SDK $SDK_VERSION (minimum macOS ${MIN_OS:-14.0}) so Liquid Glass is enabled"
+
 # 2. Info.plist from canonical source
 if [ -f "$PROJECT_ROOT/packaging/Info.plist" ]; then
     cp "$PROJECT_ROOT/packaging/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
