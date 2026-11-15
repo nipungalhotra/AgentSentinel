@@ -157,7 +157,7 @@ final class QuestionController {
         let geometry = IslandScreenGeometry(screen: screen)
         SoundEngine.shared.playPopup()
         let panel = FloatingPanel(contentRect: geometry.frame(forContentSize: CGSize(width: 400, height: 300), morphProgress: 0.1))
-        let host = NSHostingView(rootView: QuestionCardRoot(model: model) { [weak panel] size in
+        let host = NSHostingView(rootView: QuestionCardRoot(model: model, maxHeight: screen.maxCardHeight) { [weak panel] size in
             guard let panel, size != .zero else { return }
             panel.setFrame(geometry.frame(forContentSize: size, morphProgress: 1.0), display: true, animate: true)
         })
@@ -176,10 +176,11 @@ final class QuestionController {
 
 struct QuestionCardRoot: View {
     @Bindable var model: QuestionModel
+    var maxHeight: CGFloat = 640
     var onSize: (CGSize) -> Void
 
     var body: some View {
-        QuestionCard(model: model)
+        QuestionCard(model: model, maxHeight: maxHeight)
             .background(GeometryReader { Color.clear.preference(key: CardSizeKey.self, value: $0.size) })
             .onPreferenceChange(CardSizeKey.self, perform: onSize)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -188,6 +189,7 @@ struct QuestionCardRoot: View {
 
 struct QuestionCard: View {
     @Bindable var model: QuestionModel
+    var maxHeight: CGFloat = 640
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -226,41 +228,46 @@ struct QuestionCard: View {
                 Spacer(minLength: 0)
             }
 
-            Text(item.question)
-                .font(.system(size: 14.5, weight: .medium))
-                .fixedSize(horizontal: false, vertical: true)
+            // The question and its options scroll when long, so the buttons below never leave the screen.
+            CappedScroll(maxHeight: maxHeight - 150) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(item.question)
+                        .font(.system(size: 14.5, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
 
-            VStack(spacing: 8) {
-                ForEach(Array(item.options.enumerated()), id: \.offset) { i, option in
-                    Button { model.choose(i) } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Text("\(i + 1)")
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
-                                .frame(width: 20, height: 20)
-                                .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.label).font(.system(size: 13.5, weight: .semibold))
-                                if !option.description.isEmpty {
-                                    Text(option.description)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(spacing: 8) {
+                        ForEach(Array(item.options.enumerated()), id: \.offset) { i, option in
+                            Button { model.choose(i) } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text("\(i + 1)")
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .frame(width: 20, height: 20)
+                                        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(option.label).font(.system(size: 13.5, weight: .semibold))
+                                        if !option.description.isEmpty {
+                                            Text(option.description)
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(.secondary)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    Spacer(minLength: 0)
+                                    if item.multiSelect {
+                                        Image(systemName: model.picked.contains(i) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(model.picked.contains(i) ? pill.color : .secondary)
+                                    }
                                 }
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(model.picked.contains(i) ? 0.12 : 0.06),
+                                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .contentShape(Rectangle())
                             }
-                            Spacer(minLength: 0)
-                            if item.multiSelect {
-                                Image(systemName: model.picked.contains(i) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(model.picked.contains(i) ? pill.color : .secondary)
-                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(option.description.isEmpty ? option.label : "\(option.label). \(option.description)")
                         }
-                        .padding(.horizontal, 12).padding(.vertical, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.primary.opacity(model.picked.contains(i) ? 0.12 : 0.06),
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(option.description.isEmpty ? option.label : "\(option.label). \(option.description)")
                 }
             }
 
