@@ -11,10 +11,10 @@ for image in ubuntu:24.04 python:3.9-slim; do
   cid=$(docker run -d "$image" sleep infinity)
   trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
   docker exec "$cid" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 unzip curl procps >/dev/null 2>&1 || true; command -v python3 || ln -s /usr/local/bin/python3 /usr/bin/python3; useradd -m -s /bin/bash dev; mkdir /work'
-  docker cp "$ZIP" "$cid:/work/loggdin.zip"
+  docker cp "$ZIP" "$cid:/work/$(basename "$ZIP")"
   docker cp "$ROOT/tests/linux_scenario.sh" "$cid:/work/scenario.sh"
   docker exec "$cid" chown -R dev /work
-  if docker exec -u dev -w /home/dev -e LOGGDIN_ZIP=/work/loggdin.zip "$cid" sh /work/scenario.sh; then
+  if docker exec -u dev -w /home/dev -e LOGGDIN_ZIP="/work/$(basename "$ZIP")" "$cid" sh /work/scenario.sh; then
     echo "✅ $image passed"
   else
     echo "❌ $image failed"; status=1

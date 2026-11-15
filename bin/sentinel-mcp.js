@@ -215,7 +215,7 @@ rl.on('line', async (line) => {
         capabilities: { tools: {} },
         serverInfo: {
           name: 'agent-sentinel',
-          version: '1.2.0'
+          version: '1.2.1'
         }
       });
       return;

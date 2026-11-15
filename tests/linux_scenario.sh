@@ -5,7 +5,7 @@ cd ~
 mkdir -p ~/.claude ~/.codex           # pretend Claude Code and Codex are installed
 echo '{"model":"opus","permissions":{"allow":["Bash(ls:*)"]}}' > ~/.claude/settings.json
 unzip -q "${LOGGDIN_ZIP:?set LOGGDIN_ZIP to the portable zip}"
-cd loggdin-portable-v1.2.0
+cd "$(basename "${LOGGDIN_ZIP}" .zip)"   # folder name follows the version in the zip name
 echo "=== install.sh"
 ./install.sh
 export PATH="$HOME/.local/bin:$PATH"
