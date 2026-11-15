@@ -2018,6 +2018,7 @@ class ApprovalCard:
         for n in range(1, 7):     # number keys pick a question's option
             root.bind(str(n), lambda e, n=n: self.key_digit(n))
         self.q_index, self.q_answers, self.q_picked = 0, {}, set()
+        self.reset_fit()
         if autostart:
             root.after(10, self.poll)
         root.after(50, self.tick)
@@ -2047,6 +2048,68 @@ class ApprovalCard:
             cand = (text[:mid // 2] + "…" + text[len(text) - mid // 2:]) if middle else text[:mid] + "…"
             lo, hi = (mid, hi) if font.measure(cand) <= width else (lo, mid - 1)
         return (text[:lo // 2] + "…" + text[len(text) - lo // 2:]) if middle else text[:lo] + "…"
+
+    # -- keeping the buttons on screen --
+    # The card is a canvas sized to its content, so long agent text (a big command, a long question)
+    # could push the buttons below the bottom of the screen. Text is drawn with a line budget; when
+    # the card would be taller than the screen, the budget shrinks and the card is drawn again.
+    def reset_fit(self):
+        self.cmd_lines, self.q_lines, self.q_compact = 14, 10, False
+
+    def max_h(self):
+        return self.root.winfo_screenheight() - getattr(self, "top", self.px(8)) - self.px(48)
+
+    def shrink_to_fit(self, H):
+        """True if the line budget was reduced and the card should be drawn again."""
+        over = H - self.max_h()
+        if over <= 0:
+            return False
+        step = max(1, -(-over // max(1, self.f_mono.metrics("linespace"))))
+        if self.kind == "question":
+            if not self.q_compact:
+                self.q_compact = True           # drop option descriptions first
+                return True
+            if self.q_lines > 2:
+                self.q_lines = max(2, self.q_lines - step)
+                return True
+            return False
+        if self.cmd_lines > 2:
+            self.cmd_lines = max(2, self.cmd_lines - step)
+            return True
+        return False
+
+    @staticmethod
+    def wrap_lines(font, text, width):
+        lines = []
+        for para in str(text).split("\n"):
+            line = ""
+            for word in para.split(" "):
+                cand = word if not line else line + " " + word
+                if font.measure(cand) <= width:
+                    line = cand
+                    continue
+                if line:
+                    lines.append(line)
+                while font.measure(word) > width:      # one long word (a path, a URL): break it
+                    cut = len(word)
+                    while cut > 1 and font.measure(word[:cut]) > width:
+                        cut -= 1
+                    lines.append(word[:cut])
+                    word = word[cut:]
+                line = word
+            lines.append(line)
+        return lines
+
+    def clamp(self, font, text, width, max_lines):
+        lines = self.wrap_lines(font, text, width)
+        if len(lines) <= max_lines:
+            return "\n".join(lines)
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and font.measure(last + " …") > width:
+            last = last[:-1]
+        lines[-1] = last + " …"
+        return "\n".join(lines)
 
     def bind(self, tag, click, hover_item=None, normal=None, hover=None):
         c = self.c
@@ -2102,6 +2165,7 @@ class ApprovalCard:
         first = not self.visible
         self.req, self.scope_i, self.details, self.copied, self.hold_start = req, 0, False, False, None
         self.q_index, self.q_answers, self.q_picked = 0, {}, set()
+        self.reset_fit()
         self.armed_at = time.time() + self.ARM_DELAY
         self.render()
         if first:
@@ -2444,6 +2508,8 @@ class ApprovalCard:
     def frame_end(self, y, accent, tint=0.06):
         c, P, px, W = self.c, self.P, self.px, self.W
         H = y + px(18)
+        if self.shrink_to_fit(H):
+            return self.render()
         bg = self.rrect(px(1), px(1), W - px(1), H - px(1), px(24), fill=_mix(accent, P["bg"], tint),
                         outline=P["border"], width=max(1, px(1)))
         c.tag_lower(bg)
@@ -2465,19 +2531,21 @@ class ApprovalCard:
         if len(items) > 1:
             chips.append((f"{self.q_index + 1} of {len(items)}", P["muted"]))
         y = self.header(y, x0, x1, f"{name} asks", chips, col)
-        t = c.create_text(x0 + px(2), y, anchor="nw", text=item["question"], fill=P["fg"], font=self.f_q,
-                          width=x1 - x0 - px(4))
+        t = c.create_text(x0 + px(2), y, anchor="nw", fill=P["fg"], font=self.f_q, width=x1 - x0 - px(4),
+                          text=self.clamp(self.f_q, item["question"], x1 - x0 - px(4), self.q_lines))
         y = c.bbox(t)[3] + px(12)
         multi = item["multiSelect"]
         for i, o in enumerate(item["options"]):
             tag, picked = f"opt{i}", i in self.q_picked
             lx = x0 + px(46)
-            lt = c.create_text(lx, y + px(10), anchor="nw", text=o["label"], fill=P["fg"], font=self.f_opt,
-                               width=x1 - lx - px(12), tags=(tag,))
+            lt = c.create_text(lx, y + px(10), anchor="nw", fill=P["fg"], font=self.f_opt, width=x1 - lx - px(12),
+                               text=self.clamp(self.f_opt, o["label"], x1 - lx - px(12), 2 if self.q_compact else 3),
+                               tags=(tag,))
             bottom = c.bbox(lt)[3]
-            if o.get("description"):
-                dt = c.create_text(lx, bottom + px(2), anchor="nw", text=o["description"], fill=P["muted"],
-                                   font=self.f_tiny, width=x1 - lx - px(12), tags=(tag,))
+            if o.get("description") and not self.q_compact:
+                dt = c.create_text(lx, bottom + px(2), anchor="nw", fill=P["muted"], font=self.f_tiny,
+                                   text=self.clamp(self.f_tiny, o["description"], x1 - lx - px(12), 3),
+                                   width=x1 - lx - px(12), tags=(tag,))
                 bottom = c.bbox(dt)[3]
             bottom += px(10)
             row = self.rrect(x0, y, x1, bottom, px(12), fill=P["btn"],
@@ -2601,8 +2669,8 @@ class ApprovalCard:
         cmd = str(req.get("command", ""))
         if len(cmd) > 600:
             cmd = cmd[:400] + " … " + cmd[-180:]
-        t = c.create_text(x0 + inner, cy, anchor="nw", text=cmd, fill=P["fg"], font=self.f_mono,
-                          width=x1 - x0 - 2 * inner)
+        t = c.create_text(x0 + inner, cy, anchor="nw", fill=P["fg"], font=self.f_mono, width=x1 - x0 - 2 * inner,
+                          text=self.clamp(self.f_mono, cmd, x1 - x0 - 2 * inner, self.cmd_lines))
         cy = c.bbox(t)[3] + px(8)
         for w in (req.get("secretWarnings") or [])[:2]:
             wt = c.create_text(x0 + inner + px(22), cy + px(4), anchor="nw", fill=P["high"], font=self.f_tiny,
@@ -2692,6 +2760,8 @@ class ApprovalCard:
             y += bh
 
         H = y + px(18)
+        if self.shrink_to_fit(H):
+            return self.render()
         tint = _mix(accent, P["bg"], 0.11 if self.high else 0.06)
         bg = self.rrect(px(1), px(1), W - px(1), H - px(1), px(24), fill=tint, outline=P["border"], width=max(1, px(1)))
         c.tag_lower(bg)

@@ -521,6 +521,12 @@ struct PermissionCard: View {
 
     private let faceCenter = CGPoint(x: 44, y: 44)
 
+    /// Room for the command and details: the screen's height minus the header, scope picker and buttons.
+    private var contentLimit: CGFloat {
+        let screen = geometry.map { $0.screenFrame.height - $0.notchHeight - 30 } ?? 760
+        return screen - 250
+    }
+
     var body: some View {
         let pill = PillCatalog.definition(for: model.request.requestedBy)
         VStack(spacing: 0) {
@@ -550,8 +556,13 @@ struct PermissionCard: View {
 
             if model.isAsking {
                 VStack(spacing: 12) {
-                    commandBox
-                    if model.detailsOpen { details }
+                    // Command and details scroll when long; scope and buttons always stay visible.
+                    CappedScroll(maxHeight: contentLimit) {
+                        VStack(spacing: 12) {
+                            commandBox
+                            if model.detailsOpen { details }
+                        }
+                    }
                     ScopePicker(selection: $model.scope, locked: model.isHigh)
                     actions.padding(.top, 4)
                 }
