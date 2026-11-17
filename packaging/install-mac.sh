@@ -1,7 +1,7 @@
 #!/bin/bash
 # loggdin installer for macOS.
 #
-#   curl -fsSL https://loggdin.com/install.sh | bash
+#   curl -fsSL https://nipungalhotra.github.io/AgentSentinel/install.sh | bash
 #
 # Downloads the latest Loggdin.dmg from GitHub Releases, checks its SHA-256, copies Loggdin.app into
 # /Applications (or ~/Applications without admin rights) and opens it. The app then puts the

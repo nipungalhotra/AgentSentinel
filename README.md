@@ -70,7 +70,7 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 
 ### Option 1: One-line install (recommended on macOS 14+)
 ```bash
-curl -fsSL https://loggdin.com/install.sh | bash
+curl -fsSL https://nipungalhotra.github.io/AgentSentinel/install.sh | bash
 ```
 It downloads the latest release from GitHub, checks its SHA-256, copies `Loggdin.app` into
 `/Applications` (or `~/Applications` without admin rights) and opens it. The app puts the `loggdin`

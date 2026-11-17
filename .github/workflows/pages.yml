@@ -37,7 +37,7 @@ jobs:
           done
           exit $missing
 
-      - name: Publish the macOS installer at loggdin.com/install.sh
+      - name: Publish the macOS installer at nipungalhotra.github.io/AgentSentinel/install.sh
         run: cp packaging/install-mac.sh website/install.sh
 
       - uses: actions/configure-pages@v5
