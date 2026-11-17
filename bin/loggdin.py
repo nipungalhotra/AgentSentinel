@@ -56,7 +56,7 @@ from urllib.parse import parse_qs, urlparse
 import urllib.request
 import urllib.error
 
-VERSION = "1.2.0"
+VERSION = "1.2.2"
 DEFAULT_PORT = 9191
 PORT_RANGE = 10                      # 9191..9200 if the default is taken
 ASK_TIMEOUT = float(os.environ.get("LOGGDIN_TIMEOUT", "115"))  # agents allow 120s
@@ -1590,6 +1590,10 @@ def stable_python():
             return [launcher, "-3"]
         return [python_exe()]
     current = os.path.realpath(sys.executable or "")
+    # Apple's Python lives inside Xcode or the Command Line Tools, and that internal path changes when
+    # Xcode is updated, moved or removed. /usr/bin/python3 always follows the active developer tools.
+    if sys.platform == "darwin" and ("/Contents/Developer/" in current or "/Library/Developer/CommandLineTools/" in current):
+        return ["/usr/bin/python3"]
     candidates = [shutil.which("python3"), "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
     for c in candidates:
         if c and os.path.exists(c) and os.path.realpath(c) == current:
@@ -1755,6 +1759,62 @@ def uninstall_target(target):
 
 
 TARGETS = ("claude", "codex", "antigravity", "cursor", "cowork", "copilot")
+
+
+def _mentions_loggdin(server):
+    text = json.dumps(server) if isinstance(server, dict) else ""
+    return "sentinel-mcp.js" in text or "loggdin" in text.lower()
+
+
+def cleanup_leftovers():
+    """What `uninstall all` removes besides the agent hooks: the zsh terminal gate, loggdin MCP servers
+    that older versions added to Claude Code's own config (~/.claude.json), and the PATH line loggdin
+    added for its command. Returns a description of each thing removed."""
+    removed = []
+    if IS_WINDOWS:
+        return removed
+    # zsh terminal gate (bin/sentinel install zsh)
+    for rc in (home(".zshrc"), home(".zprofile")):
+        try:
+            with open(rc, encoding="utf-8") as f:
+                text = f.read()          # not read_text(): keep the file exactly as it is, final newline included
+        except OSError:
+            continue
+        if "sentinel-hook.zsh" in text or "Added by loggdin" in text:
+            lines, out, skip_next = text.splitlines(keepends=True), [], False
+            for line in lines:
+                if skip_next:
+                    skip_next = False
+                    if ".local/bin" in line or "sentinel-hook.zsh" in line:
+                        continue
+                if "Agent Sentinel Terminal Gate" in line or "Added by loggdin" in line:
+                    skip_next = True
+                    continue
+                if "sentinel-hook.zsh" in line:
+                    continue
+                out.append(line)
+            with open(rc, "w", encoding="utf-8") as f:
+                f.write("".join(out))
+            removed.append(f"loggdin lines in {os.path.basename(rc)}")
+    share = home(".local", "share", "sentinel")
+    if os.path.isdir(share):
+        shutil.rmtree(share, ignore_errors=True)
+        removed.append("zsh terminal gate (~/.local/share/sentinel)")
+    # MCP servers older versions wrote into Claude Code's config
+    path = home(".claude.json")
+    root = read_json(path)
+    if root:
+        changed = 0
+        for holder in [root] + [p for p in (root.get("projects") or {}).values() if isinstance(p, dict)]:
+            servers = holder.get("mcpServers")
+            if isinstance(servers, dict):
+                for name in [n for n, s in servers.items() if _mentions_loggdin(s)]:
+                    servers.pop(name)
+                    changed += 1
+        if changed:
+            write_json(path, root)
+            removed.append(f"{changed} old loggdin MCP server entr{'y' if changed == 1 else 'ies'} in ~/.claude.json")
+    return removed
 
 
 def is_target_installed(t):
@@ -3050,6 +3110,9 @@ def main(argv=None):
         if not targets:
             print("No supported agents detected (Claude Code, Codex, Antigravity, Cursor, Claude Desktop, Copilot).")
         failed = 0
+        if cmd == "uninstall" and target == "all":
+            for note in cleanup_leftovers():
+                print(f"✓ removed {note}")
         for t in targets:
             if cmd == "uninstall" and target == "all" and not is_target_installed(t):
                 continue

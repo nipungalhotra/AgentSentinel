@@ -7,7 +7,7 @@ name: Website (GitHub Pages)
 on:
   push:
     branches: [ main ]
-    paths: [ "website/**", ".github/workflows/pages.yml" ]
+    paths: [ "website/**", "packaging/install-mac.sh", ".github/workflows/pages.yml" ]
   workflow_dispatch:
 
 permissions:
@@ -36,6 +36,9 @@ jobs:
             [ -e "$ref" ] || { echo "::error::missing file referenced by the site: $ref"; missing=1; }
           done
           exit $missing
+
+      - name: Publish the macOS installer at loggdin.com/install.sh
+        run: cp packaging/install-mac.sh website/install.sh
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

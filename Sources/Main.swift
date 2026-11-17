@@ -26,7 +26,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SentinelManager.shared.startup()
         _ = PhoneRelay.shared   // start listening for phone replies if phone approvals are on
-        // Dashboard is NOT opened automatically; user can open it from the menu bar if desired.
+        // First launch: nothing is connected yet, so open the dashboard on Agent Integrations instead of
+        // leaving a menu-bar icon that looks active while no agent is actually checked.
+        if !UserDefaults.standard.bool(forKey: "didFirstLaunchSetup") {
+            UserDefaults.standard.set(true, forKey: "didFirstLaunchSetup")
+            if !HookInstaller.shared.anyAgentConnected {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { SentinelManager.shared.openDashboard(section: "agents") }
+            }
+        }
 
         // Automatically suppress and close any default SwiftUI window created on startup
         DispatchQueue.main.async {
@@ -73,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "dashboard":
             Task { @MainActor in
                 let section = queryItems.first(where: { $0.name == "section" })?.value?.lowercased()
-                SentinelManager.shared.openDashboard(section: section == "phone" ? "phone" : nil)
+                SentinelManager.shared.openDashboard(section: ["phone", "agents"].contains(section ?? "") ? section : nil)
             }
         case "sound":
             if let name = queryItems.first(where: { $0.name == "name" })?.value {

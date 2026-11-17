@@ -12,10 +12,41 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 BIN_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 
+# A Python 3 that actually runs. On a Mac without Apple's developer tools, /usr/bin/python3 is only a
+# placeholder that pops up an installer and fails, so it counts only when the tools are present.
+find_python() {
+  local c
+  [ "${LOGGDIN_PYTHON:-}" = "none" ] && return 1      # for tests: behave like a Mac without Python
+  for c in ${LOGGDIN_PYTHON:+"$LOGGDIN_PYTHON"} /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+           /Library/Frameworks/Python.framework/Versions/Current/bin/python3; do
+    [ -n "$c" ] && [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  if [ "$(uname -s)" = "Darwin" ]; then
+    xcode-select -p >/dev/null 2>&1 && [ -x /usr/bin/python3 ] && { echo /usr/bin/python3; return 0; }
+  else
+    c="$(command -v python3 2>/dev/null)" && { echo "$c"; return 0; }
+  fi
+  return 1
+}
+
+need_python() {
+  PY="$(find_python)" && return 0
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "loggdin needs Python 3, and this Mac doesn't have it yet." >&2
+    echo "Install Apple's free command line tools (one click, a few minutes):" >&2
+    echo "    xcode-select --install" >&2
+    echo "or, if you use Homebrew:  brew install python" >&2
+  else
+    echo "loggdin needs Python 3.9 or later. Install it with your package manager, then try again." >&2
+  fi
+  echo "Then run this command again." >&2
+  exit 1
+}
+
 # Windows/Linux: the native app is macOS-only, so use the cross-platform daemon + CLI.
 if [ "$(uname -s)" != "Darwin" ] || [ -n "${LOGGDIN_PORTABLE:-}" ]; then
   for py in "$BIN_DIR/loggdin.py" "${XDG_CONFIG_HOME:-$HOME/.config}/loggdin/loggdin.py"; do
-    [ -f "$py" ] && exec python3 "$py" "$@"
+    [ -f "$py" ] && { need_python; exec "$PY" "$py" "$@"; }
   done
   echo "loggdin: loggdin.py not found next to $BIN_DIR" >&2
   exit 1
@@ -116,7 +147,8 @@ cmd_run() {
   ensure_daemon
 
   COMMAND="$*"
-  PAYLOAD=$(python3 -c "
+  need_python
+  PAYLOAD=$("$PY" -c "
 import json, sys
 data = {
     'command': sys.argv[1],
@@ -136,7 +168,7 @@ print(json.dumps(data))
     -H "X-Loggdin-Token: $(get_token)" \
     -d "$PAYLOAD")
 
-  ALLOWED=$(python3 -c "
+  ALLOWED=$("$PY" -c "
 import json, sys
 try:
     res = json.loads(sys.argv[1])
@@ -219,7 +251,8 @@ cmd_pending() {
     echo "$PENDING"
     return
   fi
-  python3 -c "
+  need_python
+  "$PY" -c "
 import sys, json
 try:
     d = json.loads(sys.argv[1])
@@ -238,7 +271,8 @@ except Exception as e:
 cmd_review() {
   ensure_daemon
   PENDING=$(curl -s -H "X-Loggdin-Token: $(get_token)" "http://127.0.0.1:$PORT/pending")
-  python3 -c "
+  need_python
+  "$PY" -c "
 import sys, json, os, subprocess
 
 try:
@@ -403,7 +437,8 @@ case "$1" in
     fi
     for c in "$BIN_DIR/loggdin.py" "$APP_PATH/Contents/Resources/bin/loggdin.py" "$ROOT_DIR/bin/loggdin.py"; do
       if [ -f "$c" ]; then
-        exec python3 "$c" "$1" "$TARGET"
+        need_python
+        exec "$PY" "$c" "$1" "$TARGET"
       fi
     done
     echo "loggdin: installer (loggdin.py) not found next to $BIN_DIR or in $APP_PATH" >&2

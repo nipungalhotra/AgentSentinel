@@ -253,7 +253,8 @@ final class SentinelManager: NSObject {
 
     /// `section: "phone"` opens straight at the phone approvals card (loggdin://dashboard?section=phone).
     func openDashboard(section: String? = nil) {
-        let root: DashboardView = section == "phone" ? DashboardView(initialTab: .rules, focusPhone: true) : DashboardView()
+        let root: DashboardView = section == "phone" ? DashboardView(initialTab: .rules, focusPhone: true)
+            : section == "agents" ? DashboardView(initialTab: .integrations) : DashboardView()
         if let window = dashboardWindow {
             if section != nil { window.contentView = NSHostingView(rootView: root) }
             window.makeKeyAndOrderFront(nil)
