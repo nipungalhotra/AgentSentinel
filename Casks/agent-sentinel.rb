@@ -1,6 +1,6 @@
 cask "agent-sentinel" do
-  version "1.2.1"
-  sha256 "d8236f9b2b647453d69d5451cec7c8d91883f41320e7e8316fdf96b877107a18"
+  version "1.2.2"
+  sha256 "dc371465750f6be6ab78b3aa859fb6c91fd50c4a1e936a6666a3d4dd1016a14d"
 
   url "https://github.com/nipungalhotra/AgentSentinel/releases/download/v#{version}/loggdin-v#{version}.dmg"
   name "Agent Sentinel"
