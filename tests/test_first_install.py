@@ -78,5 +78,22 @@ class CliWithoutPythonTest(unittest.TestCase):
         self.assertIn("needs Python 3", out.stderr)
 
 
+class MacInstallerScriptTest(unittest.TestCase):
+    """packaging/install-mac.sh runs as `curl ... | bash`, i.e. under macOS's bash 3.2, which reads a
+    non-ASCII character right after `$name` (like "…") as part of the variable name."""
+
+    def test_no_unbraced_variable_touches_non_ascii_text(self):
+        import re
+        text = open(os.path.join(ROOT, "packaging", "install-mac.sh"), encoding="utf-8").read()
+        bad = re.findall(r'\$[A-Za-z_][A-Za-z_0-9]*[^\x00-\x7f]', text)
+        self.assertEqual(bad, [], "wrap these variables in ${...}")
+
+    @unittest.skipUnless(os.path.exists("/bin/bash"), "needs bash")
+    def test_parses_with_system_bash(self):
+        out = subprocess.run(["/bin/bash", "-n", os.path.join(ROOT, "packaging", "install-mac.sh")],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
