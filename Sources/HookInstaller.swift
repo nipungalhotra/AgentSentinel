@@ -57,18 +57,99 @@ final class HookInstaller {
     /// Absolute path to a real Python 3 for hook commands. Agents run hooks with a minimal PATH,
     /// and on a Mac without the Command Line Tools /usr/bin/python3 is only a stub that opens an
     /// "install developer tools" dialog on every call, so prefer real interpreters first.
+    /// Python written into agent hooks. Only stable launcher paths: Homebrew, python.org, or
+    /// /usr/bin/python3 (which follows Apple's active developer tools). Never the Python inside Xcode or
+    /// the Command Line Tools: that internal path changes when Xcode is updated, moved or removed, and the
+    /// hook would then fail silently.
     var pythonBinaryPath: String {
         let candidates = [
             "/opt/homebrew/bin/python3",
             "/usr/local/bin/python3",
-            "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
-            "/Library/Developer/CommandLineTools/usr/bin/python3",
-            "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"
+            "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
         ]
         for c in candidates where fileManager.isExecutableFile(atPath: c) {
             return c
         }
         return "/usr/bin/python3"
+    }
+
+    /// False on a Mac with neither Homebrew/python.org Python nor Apple's developer tools: there
+    /// /usr/bin/python3 is only a placeholder that pops up an installer, so hooks can't run.
+    var hasUsablePython: Bool {
+        if pythonBinaryPath != "/usr/bin/python3" { return true }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        p.arguments = ["-p"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run(); p.waitUntilExit() } catch { return false }
+        return p.terminationStatus == 0
+    }
+
+    /// Opens Apple's installer for the command line tools (which include Python 3).
+    func installPython() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+        p.arguments = ["--install"]
+        try? p.run()
+    }
+
+    var anyAgentConnected: Bool {
+        isClaudeCodeInstalled() || isCodexInstalled() || isAntigravityInstalled() || isCursorInstalled()
+            || isCoworkInstalled() || isCopilotInstalled()
+    }
+
+    enum InstallError: LocalizedError {
+        case noPython
+        var errorDescription: String? {
+            "loggdin needs Python 3 to connect agents. Install Apple's command line tools first."
+        }
+    }
+
+    // MARK: - Command-line tool
+
+    /// Makes `loggdin` work in Terminal: links it into Homebrew's bin folder when there is one (already on
+    /// PATH), and always into ~/.local/bin, adding that folder to the login PATH (~/.zprofile) if needed.
+    func installCommandLineTool() {
+        guard let res = Bundle.main.resourceURL?.appendingPathComponent("bin/loggdin"),
+              fileManager.isExecutableFile(atPath: res.path) else { return }
+        // A downloaded app approved with "Open Anyway" may run from a temporary copy; never link to it.
+        if res.path.contains("/AppTranslocation/") { return }
+        var linkedOnPath = false
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] where fileManager.isWritableFile(atPath: dir) {
+            if link(res, into: URL(fileURLWithPath: dir), replaceFiles: false) { linkedOnPath = true; break }
+        }
+        let localBin = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin", isDirectory: true)
+        try? fileManager.createDirectory(at: localBin, withIntermediateDirectories: true)
+        _ = link(res, into: localBin, replaceFiles: true)
+        if !linkedOnPath { ensureLocalBinOnPath() }
+    }
+
+    private func link(_ target: URL, into dir: URL, replaceFiles: Bool) -> Bool {
+        var ok = true
+        for name in ["loggdin", "sentinel"] {
+            let dest = dir.appendingPathComponent(name)
+            let isLink = (try? fileManager.destinationOfSymbolicLink(atPath: dest.path)) != nil
+            if fileManager.fileExists(atPath: dest.path) || isLink {
+                // Replace our own links (and, in ~/.local/bin, the old "Install CLI" copy); never someone else's file.
+                guard isLink || replaceFiles else { ok = false; continue }
+                try? fileManager.removeItem(at: dest)
+            }
+            do { try fileManager.createSymbolicLink(at: dest, withDestinationURL: target) } catch { ok = false }
+        }
+        return ok
+    }
+
+    private func ensureLocalBinOnPath() {
+        let home = fileManager.homeDirectoryForCurrentUser
+        let rcs = [".zprofile", ".zshrc", ".bash_profile", ".profile"].map { home.appendingPathComponent($0) }
+        for rc in rcs {
+            if let text = try? String(contentsOf: rc, encoding: .utf8), text.contains(".local/bin") { return }
+        }
+        let zprofile = home.appendingPathComponent(".zprofile")
+        let line = "\n# Added by loggdin: make the loggdin command available in Terminal\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"
+        let existing = (try? String(contentsOf: zprofile, encoding: .utf8)) ?? ""
+        try? (existing + line).write(to: zprofile, atomically: true, encoding: .utf8)
     }
 
     private var nodeBinaryPath: String {
@@ -147,6 +228,7 @@ final class HookInstaller {
         } catch {
             print("[HookInstaller] Note: Could not update ~/.local/bin symlinks: \(error)")
         }
+        installCommandLineTool()
     }
 
     private func quotedHookCmd(agent: String, event: String? = nil, ask: Bool = false) -> String {
@@ -211,6 +293,7 @@ final class HookInstaller {
 
     @discardableResult
     func installClaudeCodeHooks() throws -> Bool {
+        guard hasUsablePython else { throw InstallError.noPython }
         deployHookScript()
         var root = (try? readJSON(at: claudeSettingsURL)) ?? [:]
         var hooks = root["hooks"] as? [String: Any] ?? [:]
@@ -301,6 +384,7 @@ final class HookInstaller {
 
     @discardableResult
     func installAntigravityHooks() throws -> Bool {
+        guard hasUsablePython else { throw InstallError.noPython }
         deployHookScript()
         var root = (try? readJSON(at: agyHooksURL)) ?? [:]
         let baseCmd = quotedHookCmd(agent: "antigravity")
@@ -378,6 +462,7 @@ final class HookInstaller {
 
     @discardableResult
     func installCodexHooks() throws -> Bool {
+        guard hasUsablePython else { throw InstallError.noPython }
         deployHookScript()
         var root = (try? readJSON(at: codexHooksURL)) ?? [:]
         var hooks = root["hooks"] as? [String: Any] ?? [:]
@@ -525,6 +610,7 @@ final class HookInstaller {
 
     @discardableResult
     func installCopilotHooks() throws -> Bool {
+        guard hasUsablePython else { throw InstallError.noPython }
         deployHookScript()
         let baseCmd = quotedHookCmd(agent: "copilot")
         let config: [String: Any] = [

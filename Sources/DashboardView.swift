@@ -724,6 +724,34 @@ struct AgentIntegrationsTab: View {
     @UIState private var zshInstalled = false
     @UIState private var copiedSnippet = false
     @UIState private var selectedSnippet = 0
+    @UIState private var hasPython = true
+
+    /// Shown when hooks couldn't run: no Python on this Mac yet.
+    private var pythonBanner: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Python 3 is needed to connect agents")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("This Mac doesn't have it yet. Apple's free command line tools include it and take a few minutes to install.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button("Install command line tools") { HookInstaller.shared.installPython() }
+                        .controlSize(.small)
+                    Button("Check again") { checkStatus() }
+                        .controlSize(.small)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.orange.opacity(0.35), lineWidth: 1))
+    }
 
     let pythonSnippet = """
 from sentinel import ask_permission, guard
@@ -785,6 +813,7 @@ add-zsh-hook preexec sentinel_preexec
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                if !hasPython { pythonBanner }
                 headerBanner
                 agentGrid
                 snippetsDrawer
@@ -1222,6 +1251,7 @@ add-zsh-hook preexec sentinel_preexec
 
     private func checkStatus() {
         let installer = HookInstaller.shared
+        hasPython = installer.hasUsablePython
         claudeInstalled = installer.isClaudeCodeInstalled()
         coworkInstalled = installer.isCoworkInstalled()
         antigravityInstalled = installer.isAntigravityInstalled()

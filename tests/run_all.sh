@@ -31,6 +31,7 @@ run_test "Python SDK (sentinel.py & loggdin.py)" python3 tests/test_sdk_python.p
 run_test "Node.js SDK (sentinel.js)" node tests/test_sdk_node.js
 run_test "MCP Server Protocol & Tools" python3 tests/test_mcp_server.py
 run_test "Cross-platform Daemon (Windows/Linux)" python3 tests/test_crossplatform_daemon.py
+run_test "First-install fixes" python3 tests/test_first_install.py
 run_test "Phone Approvals & Agent Questions" python3 tests/test_phone_relay.py
 
 echo ""

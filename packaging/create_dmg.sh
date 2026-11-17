@@ -132,28 +132,8 @@ TMP_DMG_DIR="$(mktemp -d -t loggdin_dmg)"
 cp -R "$APP_BUNDLE" "$TMP_DMG_DIR/"
 ln -s /Applications "$TMP_DMG_DIR/Applications"
 
-# Optional double-click terminal installer for users without Homebrew
-cat << 'EOF' > "$TMP_DMG_DIR/Install CLI.command"
-#!/usr/bin/env bash
-set -e
-echo "🛡️  Installing loggdin CLI into ~/.local/bin..."
-mkdir -p "$HOME/.local/bin"
-APP="/Applications/Loggdin.app"
-if [ ! -d "$APP" ]; then
-    APP="$(dirname "$0")/Loggdin.app"
-fi
-if [ -f "$APP/Contents/Resources/bin/loggdin" ]; then
-    cp "$APP/Contents/Resources/bin/loggdin" "$HOME/.local/bin/loggdin"
-    chmod +x "$HOME/.local/bin/loggdin"
-    ln -sf "$HOME/.local/bin/loggdin" "$HOME/.local/bin/sentinel"
-    echo "✓ loggdin CLI installed to $HOME/.local/bin/loggdin (and aliased as sentinel)"
-else
-    echo "⚠️  Could not locate Loggdin.app in /Applications. Please drag Loggdin to Applications first."
-fi
-echo "🎉 Setup complete! Try running 'loggdin status' in your terminal."
-read -p "Press Enter to finish..."
-EOF
-chmod 755 "$TMP_DMG_DIR/Install CLI.command"
+# No separate CLI installer: macOS refuses to open an unsigned script from a downloaded disk image,
+# and the app itself puts the `loggdin` command on the PATH when it starts.
 
 echo "💿 [4/5] Building compressed read-only DMG with hdiutil..."
 VERSIONED_DMG="$DIST_DIR/loggdin-v${VERSION}.dmg"

@@ -68,14 +68,30 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 
 ## 📦 Installation & Packaging
 
-### Option 1: Install Pre-Built DMG
-Download the latest `Loggdin.dmg` and drag `Loggdin.app` to `/Applications`:
+### Option 1: One-line install (recommended on macOS 14+)
 ```bash
-./packaging/create_dmg.sh
-open dist/Loggdin.dmg
+curl -fsSL https://loggdin.com/install.sh | bash
 ```
+It downloads the latest release from GitHub, checks its SHA-256, copies `Loggdin.app` into
+`/Applications` (or `~/Applications` without admin rights) and opens it. The app puts the `loggdin`
+command on your PATH and opens **Agent Integrations** so you can connect your agents. The script
+is in [`packaging/install-mac.sh`](packaging/install-mac.sh) if you want to read it first.
 
-### Option 2: Build from Source
+Agents run loggdin's hook with **Python 3**. If your Mac has neither Homebrew Python nor Apple's
+developer tools, the app and the installer say so; install them with `xcode-select --install`.
+
+### Option 2: Disk image
+Download `loggdin-v<version>.dmg` from the [latest release](https://github.com/nipungalhotra/AgentSentinel/releases/latest)
+and drag **Loggdin** into **Applications**. This build isn't notarized by Apple yet, so the first time
+you open it macOS says *"loggdin" Not Opened*:
+1. Click **Done**. Don't click *Move to Trash*: it deletes the app.
+2. Open **System Settings → Privacy & Security**, and under *Security* click **Open Anyway** next to loggdin.
+3. Confirm with **Open Anyway** and your password or Touch ID.
+
+Then connect your agents on the **Agent Integrations** page that opens, or run `loggdin install`.
+To build the disk image yourself: `./packaging/create_dmg.sh` (output in `dist/`).
+
+### Option 3: Build from Source
 ```bash
 git clone https://github.com/nipungalhotra/AgentSentinel.git
 cd AgentSentinel
@@ -83,7 +99,7 @@ swift build -c release
 cp .build/release/loggdin /Applications/Loggdin.app/Contents/MacOS/loggdin
 ```
 
-### Option 3: Windows & Linux (portable daemon)
+### Option 4: Windows & Linux (portable daemon)
 The notch app is macOS-only. On Windows and Linux, loggdin runs as a small background
 daemon (`bin/loggdin.py`, Python 3.9+ standard library only) that serves the same local API,
 so the hooks, MCP server and SDKs work unchanged. You approve requests on a local web page,
@@ -211,7 +227,7 @@ curl http://localhost:9191/audit/verify
 | `loggdin grants list` | List active 10-minute temporary authorizations with time remaining. |
 | `loggdin grants revoke <id>` | Immediately revoke an active grant. |
 | `loggdin install <agent\|all>` | Install native hooks across Claude Code, Antigravity, Cursor, Codex, or all. |
-| `loggdin uninstall <agent\|all>` | Cleanly remove hooks and restore original configuration files. |
+| `loggdin uninstall <agent\|all>` | Cleanly remove hooks and restore original configuration files. `all` also removes the zsh terminal gate, old loggdin MCP entries in `~/.claude.json`, and the PATH line loggdin added. |
 | `loggdin test <agent>` | Trigger a live demo permission prompt on your screen. |
 | `loggdin phone setup\|test\|on\|off\|status` | Pair loggdin Pocket and answer from your phone (end-to-end encrypted). `delay <s>` and `details <full\|minimal>` tune it. |
 

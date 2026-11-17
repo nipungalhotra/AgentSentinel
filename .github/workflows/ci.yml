@@ -164,6 +164,9 @@ jobs:
       - name: Phone approvals (ntfy relay, offline)
         run: python tests/test_phone_relay.py
 
+      - name: First-install fixes (stable Python path, full uninstall, missing-Python message)
+        run: python tests/test_first_install.py
+
       - name: SDK, MCP and rules tests
         run: |
           python tests/test_sdk_python.py
