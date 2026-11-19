@@ -117,6 +117,40 @@ export function openSealed(pairKey: string, text: string): unknown {
   }
 }
 
+/** 16 fresh bytes: the platform's random source when there is one, otherwise a synthetic nonce
+ * (HMAC of the message, the time and Math.random under a key only this pairing has), which is
+ * unique per message, as the construction needs. */
+function nonceFor(key: Uint8Array, message: Uint8Array): Uint8Array {
+  const c = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } }).crypto;
+  if (c?.getRandomValues) return c.getRandomValues(new Uint8Array(16));
+  const salt = utf8(`${Date.now()}|${Math.random()}|${Math.random()}`);
+  return hmacSha256(key, concat(salt, message)).slice(0, 16);
+}
+
+/**
+ * Seals an object for the computer with keys derived from the pairing key: base64(nonce16 ||
+ * ciphertext || tag16), the inverse of openSealed and the same as PhoneRelay.seal / phone_seal.
+ * Only a holder of the pairing key can make one the computer accepts.
+ */
+export function seal(pairKey: string, obj: unknown): string {
+  const plain = utf8(JSON.stringify(obj));
+  const pk = utf8(pairKey);
+  const encKey = hmacSha256(pk, utf8('loggdin-phone|v1|enc'));
+  const macKey = hmacSha256(pk, utf8('loggdin-phone|v1|mac'));
+  const nonce = nonceFor(macKey, plain);
+  const cipher = new Uint8Array(plain.length);
+  for (let block = 0; block * 32 < plain.length; block++) {
+    const counter = new Uint8Array([block >>> 24, (block >>> 16) & 255, (block >>> 8) & 255, block & 255]);
+    const stream = hmacSha256(encKey, concat(nonce, counter));
+    for (let i = 0; i < 32 && block * 32 + i < plain.length; i++) cipher[block * 32 + i] = plain[block * 32 + i] ^ stream[i];
+  }
+  const tag = hmacSha256(macKey, concat(nonce, cipher)).slice(0, 16);
+  const all = concat(nonce, cipher, tag);
+  let bin = '';
+  for (let i = 0; i < all.length; i++) bin += String.fromCharCode(all[i]);
+  return btoa(bin);
+}
+
 /** Signature the computer checks before it accepts a phone for notifications. */
 export function signPushRegistration(pairKey: string, token: string): string {
   return hmacSha256Hex(pairKey, `loggdin-phone|v1|push|${token}`).slice(0, 32);

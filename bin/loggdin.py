@@ -13,6 +13,9 @@ API the hook, MCP server and SDKs talk to:
     POST /ask  | /hook           block until the user decides      (token)
     POST /decision|/allow|/deny  resolve the pending request       (token)
     POST /event                  non-blocking agent activity       (token)
+    POST /reply                  agent finished: wait for a reply  (token)
+    GET  /sessions               live agent sessions + pauses      (token)
+    POST /pause | /resume        pause one agent's prompts         (token)
     GET  /audit/verify           verify the SHA-256 audit chain    (token)
     GET  /audit/export[?format=csv]                                (token)
     POST /shutdown               stop the daemon                   (token)
@@ -33,6 +36,10 @@ Usage:
     loggdin popup                  approval card (started by the daemon)
     loggdin phone setup | test | on | off | status | delay <s> | details <full|minimal>
                                    approve from your phone's notifications (ntfy)
+    loggdin sessions               live agent sessions
+    loggdin pause <agent> [10m|1h|forever] | loggdin resume <agent>
+    loggdin reply <text>           answer a finished agent so it keeps working
+    loggdin reply mode <away|always|off> | loggdin reply wait <minutes>
     loggdin doctor | version
 """
 
@@ -226,6 +233,61 @@ def is_catastrophic(cmd):
                 and any(_is_drive_root(w, verb) for w in words[1:])):
             return True
     return False
+
+
+_SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish")
+_INLINE_CODE = re.compile(r"(?:^|[\s;&|(])(?:python[0-9.]*|node|deno|bun|perl|ruby|php|osascript)\s+(?:-[a-z]*[ce]\b|--eval\b)")
+_DESTRUCTIVE_CODE = ("rmtree", "os.remove", "os.unlink", "unlink(", "rimraf", "fs.rm", "rmsync", "os.system",
+                     "subprocess", "child_process", "execsync", "do shell script", "file.delete", "removedirs")
+# Files that switch loggdin off or change what it allows: editing them is always high risk.
+SELF_PROTECTED = ("/.loggdin/", ".loggdin.json", "Application Support/AgentSentinel", "AppData/Roaming/Loggdin",
+                  "/.config/loggdin", "/.claude/settings", "/.claude.json", "/.codex/hooks.json", "/.codex/config.toml",
+                  "/.gemini/config/hooks.json", "/.gemini/settings.json", "/.cursor/mcp.json", "/.copilot/hooks",
+                  "claude_desktop_config.json", "/.zshrc", "/.zprofile", "/.bashrc", "/.bash_profile", "sentinel-hook",
+                  "Loggdin.app")
+
+
+def touches_self_protected(text):
+    t = str(text or "").replace("\\", "/").replace("~/", os.path.expanduser("~").replace("\\", "/") + "/")
+    return any(p in t for p in SELF_PROTECTED)
+
+
+def score_risk(command):
+    """The hook's risk level is only a floor: anything that reaches this daemon can claim "low"."""
+    low = (command or "").lower()
+    flat = re.sub(r"[\'\"`()]", " ", low)
+    tokens = [t for t in re.split(r"[\s;&|]+", flat) if t]
+
+    def short_flag(letter):
+        return any(t.startswith("-") and not t.startswith("--") and letter in t[1:] for t in tokens)
+
+    high = (("rm" in tokens and (short_flag("r") or "--recursive" in tokens))
+            or ("find" in tokens and ("-delete" in tokens or re.search(r"-exec(dir)?\s+rm\b", flat)))
+            or any(t in ("sudo", "doas", "su") for t in tokens)
+            or ("dd" in tokens and "of=" in flat)
+            or any(p in flat for p in ("mkfs", "shutdown", "reboot", "> /dev/sd", ">/dev/sd", "diskutil erase",
+                                       "diskutil partition", "drop database", "drop table", "truncate table",
+                                       "chmod -r 777", "chmod 777 /", "launchctl unload", "csrutil"))
+            or (any(t in ("chmod", "chown") for t in tokens) and (short_flag("r") or "--recursive" in tokens))
+            or ":(){ :|:& };:" in low
+            or re.search(r"\|\s*(?:sudo\s+)?(?:env\s+)?(?:" + "|".join(_SHELLS) + r"|python[0-9.]*|node|perl|ruby)\b", low)
+            or ("git" in tokens and "push" in tokens and any(t == "-f" or t.startswith("--force") for t in tokens))
+            or ("git" in tokens and (("reset" in tokens and "--hard" in tokens) or ("clean" in tokens and short_flag("f"))))
+            or (_INLINE_CODE.search(low) and any(k in low for k in _DESTRUCTIVE_CODE))
+            or is_catastrophic(command or "")
+            or touches_self_protected(command))
+    if high:
+        return "high"
+    if (any(c in low for c in ("npm install", "npm i ", "pip install", "pip3 install", "brew install", "gem install",
+                               "cargo install", "yarn add", "pnpm add", "git push", "git reset", "git commit",
+                               "git branch -d", "git rebase", "git checkout --", "git restore", "git stash drop"))
+            or _INLINE_CODE.search(low)
+            or (tokens[:1] and tokens[0] in _SHELLS and "-c" in tokens) or tokens[:1] in (["eval"], ["exec"], ["xargs"])):
+        return "medium"
+    return "low"
+
+
+RISK_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
 def norm_dir(d):
@@ -425,6 +487,11 @@ def parse_request(body):
     risk = str(body.get("risk") or "low").lower()
     if risk not in ("low", "medium", "high"):
         risk = "low"
+    scored = score_risk(str(cmd))
+    if RISK_RANK[scored] > RISK_RANK[risk]:
+        risk = scored
+    if touches_self_protected(body.get("modifiesFiles")):
+        risk = "high"
     secrets_w = body.get("secretWarnings") if isinstance(body.get("secretWarnings"), list) else []
     return {
         "id": str(uuid.uuid4()).upper(),
@@ -488,10 +555,13 @@ class Pending:
             return [it[0] for it in self.items]
 
     def resolve(self, decision, req_id=None):
-        """Without an id (CLI `allow` / `deny`) only permission requests are answered."""
+        """Without an id (CLI `allow` / `deny`) only permission requests are answered.
+        A high-risk request is only ever allowed once, whoever answers."""
         with self.lock:
             for req, ev, holder in self.items:
                 if req["id"] == req_id or (req_id is None and req.get("kind", "permission") == "permission"):
+                    if req.get("risk") == "high" and decision.get("type") == "allow" and decision.get("scope") != "once":
+                        decision = dict(decision, scope="once")
                     holder["decision"] = decision
                     ev.set()
                     return True
@@ -581,9 +651,12 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 button{font:inherit;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:8px 14px;cursor:pointer}
 button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.deny{color:var(--hi)}
 .empty{color:var(--muted);text-align:center;padding:40px 0}.err{color:var(--hi)}
+textarea{font:inherit;width:100%;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:8px;margin:6px 0}
+#sessions{margin-top:24px}#sessions .row{margin:6px 0}
 </style></head><body><main>
 <h1>loggdin</h1><p class="sub">Permission requests from your AI agents. Keep this tab open, or run <code>loggdin ui</code> when notified.</p>
 <div id="list"><p class="empty">Loading…</p></div>
+<div id="sessions" class="card"></div>
 </main>
 <script nonce="__NONCE__">
 (function(){
@@ -619,18 +692,38 @@ button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.d
     var pass=el('button','','Answer in '+r.requestedBy);pass.onclick=function(){post({requestId:r.id,decision:'terminal'});};
     b.appendChild(send);b.appendChild(pass);c.appendChild(b);return c;
   }
+  var replies={};  // reply drafts survive the refresh
+  function reply(r){
+    var c=el('div','card');c.appendChild(el('div','agent',r.title));
+    c.appendChild(el('div','meta','In '+r.directory+' \u00b7 reply to keep it working'));
+    c.appendChild(el('pre',null,r.message));
+    var t=el('textarea');t.rows=3;t.placeholder='Tell '+r.requestedBy+' what to do next\u2026';t.value=replies[r.id]||'';
+    t.style.width='100%';t.style.boxSizing='border-box';t.dataset.rid=r.id;
+    t.oninput=function(){replies[r.id]=t.value;};
+    var b=el('div','row'),send=el('button','primary','Send');
+    send.onclick=function(){var v=(replies[r.id]||'').trim();if(!v)return;delete replies[r.id];post({requestId:r.id,text:v});};
+    t.onkeydown=function(e){if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))send.onclick();};
+    var stop=el('button','','Let it stop');stop.onclick=function(){delete replies[r.id];post({requestId:r.id,decision:'dismiss'});};
+    c.appendChild(t);b.appendChild(send);b.appendChild(stop);c.appendChild(b);return c;
+  }
   function notice(r){
     var c=el('div','card');c.appendChild(el('div','agent',r.title));
     if(r.message)c.appendChild(el('pre',null,r.message));
     var x=el('button','','Dismiss');x.onclick=function(){post({requestId:r.id,decision:'dismiss'});};
     c.appendChild(x);return c;
   }
+  var lastIds='';
   function render(items){
+    var ids=items.map(function(r){return r.id;}).join(',');
+    // Don't rebuild while you're typing a reply.
+    if(ids===lastIds&&document.activeElement&&document.activeElement.tagName==='TEXTAREA')return;
+    lastIds=ids;
     list.textContent='';
     if(!items.length){list.appendChild(el('p','empty','No pending requests.'));return;}
     items.forEach(function(r){
       if(r.kind==='question'){list.appendChild(question(r));return;}
       if(r.kind==='notice'){list.appendChild(notice(r));return;}
+      if(r.kind==='reply'){list.appendChild(reply(r));return;}
       var c=el('div','card'),top=el('div','row');
       top.appendChild(el('span','agent',r.requestedBy));top.appendChild(el('span','pill '+r.risk,r.risk+' risk'));
       c.appendChild(top);c.appendChild(el('div','meta',r.subtitle));
@@ -640,14 +733,41 @@ button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.d
       if(r.blastRadius)c.appendChild(el('div','meta','Blast radius: '+r.blastRadius));
       if(r.diffPreview)c.appendChild(el('pre',null,r.diffPreview));
       var b=el('div','row');
-      var opts=[['Allow once','allow','once','primary'],['Allow 10 min','allow','10m','']];
-      if(r.risk!=='high')opts.push(['10 min, all folders','allow','10m-all','']);
-      opts.push(['Always allow','allow','always',''],['Deny','deny','','deny']);
+      // High risk: only once or deny (loggdin allows a high-risk request once, whoever answers).
+      var opts=[['Allow once','allow','once','primary']];
+      if(r.risk!=='high')opts.push(['Allow 10 min','allow','10m',''],['10 min, all folders','allow','10m-all',''],['Always allow','allow','always','']);
+      opts.push(['Deny','deny','','deny']);
       opts.forEach(function(a){
         var x=el('button',a[3],a[0]);x.onclick=function(){decide(r.id,a[1],a[2]);};b.appendChild(x);});
       c.appendChild(b);list.appendChild(c);
     });
   }
+  var sess=document.getElementById('sessions');
+  function api(path,body){return fetch(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json','X-Loggdin-Token':tok},
+    body:body?JSON.stringify(body):undefined}).then(function(r){return r.json();});}
+  function renderSessions(j){
+    if(!sess)return;sess.textContent='';
+    var rows=j.sessions||[],paused=j.paused||{},st=j.settings||{};
+    var h=el('div','row');h.appendChild(el('span','agent','Sessions'));sess.appendChild(h);
+    if(!rows.length)sess.appendChild(el('p','meta','No agent sessions yet.'));
+    rows.forEach(function(s){
+      var dir=s.directory.split(/[\\/]/).filter(Boolean).pop()||s.directory;
+      sess.appendChild(el('div','meta','\u25cf '+s.agent+' \u00b7 '+dir+' \u2014 '+s.state+(s.detail?' \u00b7 '+s.detail:'')));});
+    var agents={};rows.forEach(function(s){agents[s.agent]=1;});Object.keys(paused).forEach(function(a){agents[a]=1;});
+    Object.keys(agents).sort().forEach(function(a){
+      var row=el('div','row');row.appendChild(el('span',null,a+(paused[a]!==undefined?' (paused)':'')));
+      (paused[a]!==undefined?[['Resume',null]]:[['Pause 10 min',10],['Pause 1 h',60],['Until resumed',0]]).forEach(function(o){
+        var b=el('button','',o[0]);b.onclick=function(){
+          api(o[1]===null?'/resume':'/pause',{agent:a,minutes:o[1]||null}).then(pollSessions);};row.appendChild(b);});
+      sess.appendChild(row);});
+    var m=el('div','row');m.appendChild(el('span','meta','Reply when an agent finishes:'));
+    [['When away','away'],['Always','always'],['Off','off']].forEach(function(o){
+      var b=el('button',st.replyMode===o[1]?'primary':'',o[0]);
+      b.onclick=function(){api('/settings',{replyMode:o[1]}).then(pollSessions);};m.appendChild(b);});
+    sess.appendChild(m);
+  }
+  function pollSessions(){if(tok)api('/sessions').then(renderSessions).catch(function(){});}
+  pollSessions();setInterval(pollSessions,5000);
   function poll(){
     if(!tok){list.innerHTML='';list.appendChild(el('p','err','Missing access token. Open this page with the command: loggdin ui'));return;}
     fetch('/pending?all=1',{headers:{'X-Loggdin-Token':tok}}).then(function(r){
@@ -912,6 +1032,33 @@ def phone_publish_notice(cfg, req):
     return _phone_deliver(cfg, sealed, "lg-n" + secrets.token_hex(10), 3, req["title"], f"In {folder}.")
 
 
+def phone_publish_reply(cfg, req):
+    """A finished agent waiting for a reply: loggdin Pocket shows its last message and a text box."""
+    folder = phone_folder(req.get("directory"))
+    message = "Finished its turn." if cfg.get("details") == "minimal" else req.get("message", "")
+    wait = int(req.get("expiresAt", 0) - req.get("createdAt", 0)) or 600
+    sealed = phone_seal(cfg, {"k": "r", "i": req["id"], "t": req["title"], "m": f"{message}\nFolder: {folder}",
+                              "w": wait, "h": False, "a": []})
+    return _phone_deliver(cfg, sealed, phone_seq(req["id"]), 4, req["title"], f"In {folder}. Reply to keep it working.")
+
+
+def phone_parse_text(cfg, text):
+    """"lg1t <sealed {i, x}>": a reply typed in loggdin Pocket. Sealed with the pairing key, so the relay
+    can neither read nor forge it."""
+    t = str(text or "")
+    if not t.startswith("lg1t "):
+        return None
+    obj = phone_open(cfg, "lg1e " + t[5:])
+    if not isinstance(obj, dict) or not isinstance(obj.get("i"), str):
+        return None
+    if obj.get("stop") is True:
+        return (obj["i"], None)                    # "Let it stop"
+    if not isinstance(obj.get("x"), str):
+        return None
+    body = obj["x"].strip()
+    return (obj["i"], body[:4000]) if body else None
+
+
 def phone_seq(req_id):
     return "lg-" + re.sub(r"[^A-Za-z0-9]", "", str(req_id)).lower()[:40]
 
@@ -933,7 +1080,7 @@ def phone_request(method, url, payload, timeout=10):
         return False, str(e)
 
 
-def phone_listen(cfg, on_reply, should_stop, since=None, on_option=None):
+def phone_listen(cfg, on_reply, should_stop, since=None, on_option=None, on_text=None):
     """Stream the reply topic; calls on_reply(req_id, decision) for every validly signed reply
     (and on_option(req_id, n) for a signed answer to an agent question).
     Returns the last message id seen so a reconnect resumes without losing replies."""
@@ -955,6 +1102,11 @@ def phone_listen(cfg, on_reply, should_stop, since=None, on_option=None):
                 if phone_register_push_token(token):
                     log("phone: registered a phone for notifications")
                 continue
+            typed = phone_parse_text(cfg, msg.get("message"))
+            if typed:
+                if on_text:
+                    on_text(*typed)
+                continue
             pick = phone_parse_option(cfg, msg.get("message"))
             if pick:
                 if on_option:
@@ -972,11 +1124,11 @@ class PhoneRelay:
         self.pushed = {}            # req_id -> config used to push it
         self.lock = threading.Lock()
 
-    def schedule(self, req):
+    def schedule(self, req, now=False):
         cfg = load_phone()
         if not cfg or not cfg.get("enabled") or os.environ.get("LOGGDIN_NO_PHONE"):
             return None
-        t = threading.Timer(cfg["pushAfter"] if cfg["mode"] == "auto" else 0, self._push, args=(req["id"],))
+        t = threading.Timer(0 if now or cfg["mode"] != "auto" else cfg["pushAfter"], self._push, args=(req["id"],))
         t.daemon = True
         t.start()
         return t
@@ -988,6 +1140,8 @@ class PhoneRelay:
             return
         if req.get("kind") == "question":
             ok, err = phone_publish_question(cfg, req)
+        elif req.get("kind") == "reply":
+            ok, err = phone_publish_reply(cfg, req)
         else:
             ok, err = phone_publish(cfg, req)
             app_ok, app_err = phone_app_notify(cfg, req)
@@ -1027,6 +1181,15 @@ class PhoneRelay:
                                  "via": "phone"}, req_id):
             log(f"phone: answered {req_id[:8]}")
 
+    def on_text(self, req_id, text):
+        """A reply typed in loggdin Pocket: only for a finished agent that is waiting for one."""
+        req = next((r for r in self.pending.all() if r["id"] == req_id), None)
+        if not req or req.get("kind") != "reply":
+            return
+        decision = {"type": "reply", "text": text, "via": "phone"} if text else {"type": "dismiss", "via": "phone"}
+        if self.pending.resolve(decision, req_id):
+            log(f"phone: {'reply' if text else 'let it stop'} for {req_id[:8]}")
+
     def notice(self, req):
         """Alerts go to the phone only when it is set to get everything at once (as on the Mac)."""
         cfg = load_phone()
@@ -1049,13 +1212,132 @@ class PhoneRelay:
                 changed = lambda: (lambda c: not c or not c.get("enabled") or
                                    (c["server"], c["topic"], c["secret"]) != current)(load_phone())
                 try:
-                    since = phone_listen(cfg, self.on_reply, changed, since, self.on_option) or since
+                    since = phone_listen(cfg, self.on_reply, changed, since, self.on_option, self.on_text) or since
                     delay = 2
                 except Exception as e:
                     log(f"phone: listener reconnecting ({e})")
                     time.sleep(delay)
                     delay = min(delay * 2, 60)
         threading.Thread(target=loop, daemon=True, name="loggdin-phone").start()
+
+
+def settings_path():
+    return os.path.join(state_dir(), "settings.json")
+
+
+def load_settings():
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            s = json.load(f)
+    except (OSError, ValueError):
+        s = {}
+    s = s if isinstance(s, dict) else {}
+    mode = s.get("replyMode") if s.get("replyMode") in ("away", "always", "off") else "away"
+    try:
+        wait = max(1, min(int(s.get("replyWait", 10)), 30))
+    except (TypeError, ValueError):
+        wait = 10
+    return {"replyMode": mode, "replyWait": wait}
+
+
+def save_settings(changes):
+    s = dict(load_settings(), **changes)
+    os.makedirs(state_dir(), exist_ok=True)
+    tmp = settings_path() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(s, f, indent=2)
+    os.replace(tmp, settings_path())
+    return s
+
+
+def user_idle_seconds():
+    """Seconds since the last keyboard/mouse input, or None when it can't be told."""
+    try:
+        if IS_WINDOWS:
+            import ctypes
+
+            class LASTINPUTINFO(ctypes.Structure):
+                _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+            info = LASTINPUTINFO()
+            info.cbSize = ctypes.sizeof(info)
+            if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+                return (ctypes.windll.kernel32.GetTickCount() - info.dwTime) / 1000.0
+            return None
+        if sys.platform == "darwin":
+            out = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True, timeout=2).stdout
+            m = re.search(r'"HIDIdleTime" = (\d+)', out)
+            return int(m.group(1)) / 1e9 if m else None
+        if shutil.which("xprintidle"):
+            out = subprocess.run(["xprintidle"], capture_output=True, text=True, timeout=2).stdout.strip()
+            return int(out) / 1000.0 if out.isdigit() else None
+    except Exception:
+        return None
+    return None
+
+
+AWAY_SECONDS = 60
+
+
+class Sessions:
+    """Live agent sessions from the hooks' activity events, and per-agent pauses."""
+    STATES = {"SessionEnd": "ended", "Stop": "finished", "Notification": "waiting", "PermissionRequest": "waiting",
+              "Question": "waiting", "Reply": "waiting"}
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.items = {}
+        self.paused = {}            # agent -> until (0 = until resumed)
+
+    @staticmethod
+    def name(agent):
+        a = str(agent or "CLI").strip()
+        return {"claude-code": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "cursor": "Cursor",
+                "copilot": "GitHub Copilot", "cowork": "Claude Desktop"}.get(a.lower(), a[:60])
+
+    def record(self, event, agent, session_id=None, directory=None, detail=None):
+        agent = self.name(agent)
+        key = session_id or f"{agent}|{directory or '~'}"
+        with self.lock:
+            s = self.items.get(key) or {"id": key, "agent": agent, "directory": directory or "~", "detail": ""}
+            s["state"] = self.STATES.get(event, "working")
+            s["lastActivity"] = time.time()
+            if directory:
+                s["directory"] = directory
+            if detail:
+                s["detail"] = str(detail)[:120]
+            self.items[key] = s
+            if len(self.items) > 200:
+                self.items.pop(min(self.items.values(), key=lambda x: x["lastActivity"])["id"], None)
+
+    def visible(self):
+        now = time.time()
+        keep = {"ended": 600, "finished": 7200}
+        with self.lock:
+            rows = [dict(s) for s in self.items.values() if now - s["lastActivity"] < keep.get(s["state"], 6 * 3600)]
+        return sorted(rows, key=lambda x: -x["lastActivity"])
+
+    def is_paused(self, agent):
+        agent = self.name(agent)
+        with self.lock:
+            until = self.paused.get(agent)
+            if until is None:
+                return False
+            if until == 0 or until > time.time():
+                return True
+            self.paused.pop(agent, None)
+            return False
+
+    def pause(self, agent, minutes=None):
+        with self.lock:
+            self.paused[self.name(agent)] = 0 if not minutes else time.time() + minutes * 60
+
+    def resume(self, agent):
+        with self.lock:
+            self.paused.pop(self.name(agent), None)
+
+    def pauses(self):
+        with self.lock:
+            return {a: u for a, u in self.paused.items() if u == 0 or u > time.time()}
 
 
 class Daemon:
@@ -1065,6 +1347,7 @@ class Daemon:
         self.store = Store()
         self.pending = Pending()
         self.phone = PhoneRelay(self.pending)
+        self.sessions = Sessions()
         self.recent_notices = {}            # (agent, title, message) -> last shown
         self.notice_lock = threading.Lock()
         self.started = time.time()
@@ -1073,8 +1356,24 @@ class Daemon:
         self.unix_path = os.path.join(state_dir(), "sentinel.sock")
 
     # -- core decision flow (shared by HTTP and unix socket) --
+    def event(self, body):
+        """Activity from the hooks (SessionStart, PreToolUse, Stop, …): feeds the sessions list."""
+        self.last_event = body
+        self.sessions.record(str(body.get("event") or ""), body.get("agent"), body.get("sessionId") or None,
+                             body.get("directory") or None, body.get("tool") or None)
+        return {"ok": True}
+
     def ask(self, body):
         req = parse_request(body)
+        self.sessions.record("PermissionRequest", req["requestedBy"], body.get("sessionId") or None, req["directory"],
+                             "Asking: " + req["command"][:80])
+        if req["risk"] != "high" and self.sessions.is_paused(req["requestedBy"]):
+            decision = {"type": "allow", "scope": "once", "via": "paused"}
+            self.sessions.record("PreToolUse", req["requestedBy"], body.get("sessionId") or None, req["directory"],
+                                 "Allowed (paused): " + req["command"][:60])
+            self.store.audit(req, decision, True)
+            log(f"PAUSED-ALLOW {req['requestedBy']}: {req['command'][:120]}")
+            return decision_json(decision)
         auto = self.store.evaluate(req)
         if auto:
             # Not remember(): re-saving an auto-allow would add a fresh 10-minute grant each time,
@@ -1097,6 +1396,9 @@ class Daemon:
         self.pending.remove(req["id"])
         self.phone.finished(req["id"], push_timer)
         decision = holder.get("decision") or {"type": "timeout"}
+        self.sessions.record("PreToolUse" if decision.get("type") == "allow" else "Stop", req["requestedBy"],
+                             body.get("sessionId") or None, req["directory"],
+                             ("Allowed: " if decision.get("type") == "allow" else "Denied: ") + req["command"][:60])
         self.store.remember(req, decision)
         self.store.audit(req, decision, False)
         log(f"  -> {decision}")
@@ -1135,6 +1437,8 @@ class Daemon:
     def notice(self, body):
         """Non-blocking alert ("is waiting for you", "has a question"); shown for a few seconds."""
         agent = str(body.get("agent") or "An agent")[:60]
+        self.sessions.record("Notification", agent, body.get("sessionId") or None, body.get("directory") or None,
+                             body.get("message") or None)
         title = str(body.get("title") or "is waiting for you")[:80]
         message = str(body.get("message") or "")[:600]
         now = time.time()
@@ -1158,9 +1462,51 @@ class Daemon:
         threading.Thread(target=expire, daemon=True).start()
         return {"ok": True, "shown": True}
 
+    def reply_wanted(self):
+        st = load_settings()
+        if st["replyMode"] == "always":
+            return True
+        if st["replyMode"] == "off":
+            return False
+        idle = user_idle_seconds()
+        return idle is not None and idle >= AWAY_SECONDS
+
+    def reply(self, body):
+        """An agent finished its turn. Returns {"text": …} to keep it working, or {} to let it stop.
+        Answers at once unless replies are on (always, or "away" and you are away)."""
+        agent = Sessions.name(body.get("agent") or "An agent")
+        directory = str(body.get("directory") or "~")
+        self.sessions.record("Stop", agent, body.get("sessionId") or None, directory, "Finished")
+        if not self.reply_wanted():
+            return {}
+        timeout = load_settings()["replyWait"] * 60.0
+        now = time.time()
+        message = str(body.get("message") or "Finished its turn.")[:1500]
+        req = {"id": str(uuid.uuid4()).upper(), "kind": "reply", "requestedBy": agent, "title": f"{agent} finished",
+               "message": message, "command": message, "directory": directory, "risk": "low",
+               "sessionId": str(body.get("sessionId") or ""), "createdAt": now, "expiresAt": now + timeout}
+        ev, holder = self.pending.add(req)
+        log(f"REPLY? {agent} finished in {directory}")
+        notify(req)
+        idle = user_idle_seconds()
+        timer = self.phone.schedule(req, now=idle is not None and idle >= AWAY_SECONDS)
+        ev.wait(timeout=timeout)
+        self.pending.remove(req["id"])
+        self.phone.finished(req["id"], timer)
+        d = holder.get("decision") or {}
+        text = d.get("text") if d.get("type") == "reply" and isinstance(d.get("text"), str) else ""
+        if text.strip():
+            self.sessions.record("UserPromptSubmit", agent, body.get("sessionId") or None, directory, "Continuing with your reply")
+            log(f"  -> reply ({len(text)} chars{', from phone' if d.get('via') == 'phone' else ''})")
+            return {"text": text.strip()[:4000]}
+        log("  -> no reply; the agent stops")
+        return {}
+
     def dispatch(self, body):
-        """One entry point for the socket and HTTP: permission request, question or notice."""
+        """One entry point for the socket and HTTP: permission request, question, notice or reply."""
         kind = body.get("kind") if isinstance(body, dict) else None
+        if kind == "reply":
+            return self.reply(body)
         if kind == "question":
             return self.question(body)
         if kind == "notice":
@@ -1207,8 +1553,7 @@ class Daemon:
                 conn.settimeout(None)
                 body = json.loads(buf.split(b"\n", 1)[0].decode("utf-8") or "{}")
                 if isinstance(body, dict) and body.get("event") and not body.get("risk") and not body.get("kind"):
-                    self.last_event = body
-                    resp = {"ok": True}
+                    resp = self.event(body)
                 else:
                     resp = self.dispatch(body)
                 conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
@@ -1327,6 +1672,9 @@ class Daemon:
                     if not r:
                         return self._send(200, {"hasPending": False, "message": "No pending permissions"})
                     return self._send(200, dict(hasPending=True, **{k: r[k] for k in ("id", "title", "subtitle", "command", "risk", "requestedBy")}))
+                if u.path == "/sessions":
+                    return self._send(200, {"sessions": daemon.sessions.visible(), "paused": daemon.sessions.pauses(),
+                                            "settings": load_settings()})
                 if u.path == "/audit/verify":
                     return self._send(200, daemon.store.verify())
                 if u.path == "/audit/export":
@@ -1352,11 +1700,28 @@ class Daemon:
                     return self._send(200, daemon.question(body))
                 if u.path == "/notice":
                     return self._send(200, daemon.notice(body))
+                if u.path == "/reply":
+                    return self._send(200, daemon.reply(body))
+                if u.path == "/settings":
+                    changes = {k: body[k] for k in ("replyMode", "replyWait") if k in body}
+                    return self._send(200, save_settings(changes) if changes else load_settings())
+                if u.path in ("/pause", "/resume"):
+                    agent = str(body.get("agent") or "").strip()
+                    if not agent:
+                        return self._send(400, {"error": "agent required"})
+                    if u.path == "/pause":
+                        try:
+                            minutes = float(body["minutes"]) if body.get("minutes") else None
+                        except (TypeError, ValueError):
+                            minutes = None
+                        daemon.sessions.pause(agent, minutes)
+                    else:
+                        daemon.sessions.resume(agent)
+                    return self._send(200, {"ok": True, "paused": daemon.sessions.pauses()})
                 if u.path in ("/allow", "/deny", "/decision"):
                     return self._decide(u.path, parse_qs(u.query), body)
                 if u.path == "/event":
-                    daemon.last_event = body
-                    return self._send(200, {"ok": True})
+                    return self._send(200, daemon.event(body))
                 if u.path == "/shutdown":
                     self._send(200, {"ok": True})
                     threading.Thread(target=daemon.httpd.shutdown, daemon=True).start()
@@ -1368,6 +1733,13 @@ class Daemon:
                     return self._send(401, {"error": "Unauthorized"})
                 rid = body.get("requestId")
                 target = next((r for r in daemon.pending.all() if r["id"] == rid), None) if rid else None
+                if target and target.get("kind") == "reply":
+                    text = body.get("text")
+                    if isinstance(text, str) and text.strip():
+                        dec = {"type": "reply", "text": text.strip()[:4000]}
+                    else:
+                        dec = {"type": "dismiss"}
+                    return self._send(200, {"success": daemon.pending.resolve(dec, rid), "decision": dec["type"]})
                 if target and target.get("kind") in ("question", "notice"):
                     # Questions take {"answers": {question: label}}; anything else ("terminal",
                     # "dismiss") hands the question back to the agent / closes the notice.
@@ -1696,7 +2068,8 @@ def install_target(target):
             pre.append({"matcher": "AskUserQuestion", "hooks": [
                 {"type": "command", "command": hook_cmd("claude-code", ask=True), "timeout": 130}]})
             hooks["PreToolUse"] = pre
-        events = [(e, 120 if e in ("PreToolUse", "PermissionRequest") else 10, None) for e in (
+        # Stop waits up to 30 min for a reply typed on the card or the phone (answered at once when replies are off).
+        events = [(e, 120 if e in ("PreToolUse", "PermissionRequest") else 1800 if e == "Stop" else 10, None) for e in (
             "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
             "PermissionRequest", "Notification", "Stop", "SubagentStart", "SubagentStop")]
         install_hook_events(home(".claude", "settings.json"), "claude-code", events, ask_hook)
@@ -2350,6 +2723,8 @@ class ApprovalCard:
             self.finish_question(None)
         elif self.kind == "notice":
             self.dismiss_notice()
+        elif self.kind == "reply":
+            self.stop_reply()
         else:
             self.decide(False, keyboard=True)
 
@@ -2669,6 +3044,67 @@ class ApprovalCard:
         y += px(19)
         self.frame_end(y, col)
 
+    def render_reply(self):
+        """An agent finished: its last message and a text box. Send keeps it working; Esc lets it stop."""
+        import tkinter as tk
+        c, P, px, req = self.c, self.P, self.px, self.req
+        y, x0, x1 = self.frame_start()
+        name, col = pill_for(req.get("requestedBy"))
+        y = self.header(y, x0, x1, req.get("title") or f"{name} finished", [(name, col)], col)
+        inner, by = px(12), y
+        msg = str(req.get("message") or "")
+        if len(msg) > 700:
+            msg = "…" + msg[-699:]
+        t = c.create_text(x0 + inner, by + inner, anchor="nw", text=msg, fill=P["fg"], font=self.f_small,
+                          width=x1 - x0 - 2 * inner)
+        bottom = c.bbox(t)[3] + inner
+        box = self.rrect(x0, by, x1, bottom, px(13), fill=P["box"], outline=P["box_border"])
+        c.tag_lower(box)
+        y = bottom + px(10)
+        if getattr(self, "reply_text", None) is None:
+            self.reply_text = tk.Text(c, height=3, wrap="word", font=self.f_small, bg=P["box"], fg=P["fg"],
+                                      insertbackground=P["fg"], relief="flat", highlightthickness=1,
+                                      highlightbackground=P["box_border"], highlightcolor=col, padx=px(8), pady=px(6))
+            # Clicking the box is the deliberate act that gives the card the keyboard.
+            self.reply_text.bind("<Button-1>", self.focus_on_click, add="+")
+            self.reply_text.bind("<Control-Return>", lambda e: (self.send_reply(), "break")[1])
+        if getattr(self, "reply_for", None) != req["id"]:
+            self.reply_text.delete("1.0", "end")
+            self.reply_for = req["id"]
+        th = px(68)
+        c.create_window(x0, y, anchor="nw", window=self.reply_text, width=x1 - x0, height=th)
+        y += th + px(10)
+        left = self.small_btn(x1, y, "Send  (Ctrl+Enter)", "b_send", self.send_reply)
+        self.small_btn(left - px(8), y, "Let it stop", "b_stop", self.stop_reply)
+        c.create_text(x0 + px(2), y + px(9), anchor="w", fill=P["muted"], font=self.f_tiny,
+                      text="Reply to keep it working")
+        y += px(19)
+        self.frame_end(y, col)
+
+    def send_reply(self):
+        if not self.req or self.resolved or self.kind != "reply" or getattr(self, "reply_text", None) is None:
+            return
+        text = self.reply_text.get("1.0", "end").strip()
+        if not text:
+            return
+        try:
+            self.api("POST", "/decision", {"requestId": self.req["id"], "text": text})
+        except Exception:
+            pass
+        self.reply_text.delete("1.0", "end")
+        self.done = (self.done + [self.req["id"]])[-50:]
+        self.after_resolved()
+
+    def stop_reply(self):
+        if not self.req or self.resolved or self.kind != "reply":
+            return
+        try:
+            self.api("POST", "/decision", {"requestId": self.req["id"], "decision": "dismiss"})
+        except Exception:
+            pass
+        self.done = (self.done + [self.req["id"]])[-50:]
+        self.after_resolved()
+
     def render(self):
         if not self.req:
             return
@@ -2676,6 +3112,8 @@ class ApprovalCard:
             return self.render_question()
         if self.kind == "notice":
             return self.render_notice()
+        if self.kind == "reply":
+            return self.render_reply()
         c, P, px, req = self.c, self.P, self.px, self.req
         c.delete("all")
         self.hold_geom = None
@@ -3095,6 +3533,63 @@ def main(argv=None):
         else:
             print("✓ No permissions currently pending.")
         return 0
+    if cmd == "sessions":
+        code, body = http("GET", "/sessions")
+        if code is None:
+            print("❌ loggdin daemon is not running.", file=sys.stderr)
+            return 1
+        rows = (body or {}).get("sessions") or []
+        if not rows:
+            print("No agent sessions yet.")
+        for r in rows:
+            ago = int(time.time() - r.get("lastActivity", time.time()))
+            print(f"● {r['agent']:<14} {r['state']:<9} {r['directory']}  ({ago}s ago){'  · ' + r['detail'] if r.get('detail') else ''}")
+        for agent, until in ((body or {}).get("paused") or {}).items():
+            print(f"⏸  {agent} paused " + ("until resumed" if not until else f"for {max(1, int((until - time.time()) / 60))} more min"))
+        print(f"Replies when an agent finishes: {((body or {}).get('settings') or {}).get('replyMode', 'away')}")
+        return 0
+    if cmd in ("pause", "resume"):
+        if not argv:
+            print(f"usage: loggdin {cmd} <agent>" + (" [10m|1h|forever]" if cmd == "pause" else ""), file=sys.stderr)
+            return 2
+        agent, minutes = argv[0], None
+        if cmd == "pause" and len(argv) > 1 and argv[1] != "forever":
+            m = re.fullmatch(r"(\d+)\s*(m|min|h)?", argv[1])
+            if not m:
+                print("duration: 10m, 1h or forever", file=sys.stderr)
+                return 2
+            minutes = int(m.group(1)) * (60 if m.group(2) == "h" else 1)
+        code, _ = http("POST", f"/{cmd}", {"agent": agent, "minutes": minutes})
+        if code != 200:
+            print("❌ loggdin daemon is not running.", file=sys.stderr)
+            return 1
+        print(f"⏸  {agent}: low and medium risk requests are allowed and logged "
+              + (f"for {minutes} min" if minutes else "until you resume") + ". High risk still asks."
+              if cmd == "pause" else f"▶️  {agent}: protection resumed.")
+        return 0
+    if cmd == "reply":
+        if argv[:1] == ["mode"] and len(argv) > 1 and argv[1] in ("away", "always", "off"):
+            save_settings({"replyMode": argv[1]})
+            print(f"Replies when an agent finishes: {argv[1]}")
+            return 0
+        if argv[:1] == ["wait"] and len(argv) > 1 and argv[1].isdigit():
+            st = save_settings({"replyWait": int(argv[1])})
+            print(f"A finished agent waits up to {st['replyWait']} min for a reply.")
+            return 0
+        text = " ".join(argv).strip()
+        if not text or argv[:1] in (["mode"], ["wait"]):
+            print("usage: loggdin reply <text> | loggdin reply mode <away|always|off> | loggdin reply wait <minutes>",
+                  file=sys.stderr)
+            return 2
+        code, body = http("GET", "/pending?all=1")
+        waiting = [r for r in ((body or {}).get("requests") or []) if r.get("kind") == "reply"]
+        if not waiting:
+            print("No agent is waiting for a reply.")
+            return 1
+        code, body = http("POST", "/decision", {"requestId": waiting[0]["id"], "text": text})
+        ok = code == 200 and (body or {}).get("success")
+        print(f"✓ Sent to {waiting[0]['requestedBy']}; it keeps working." if ok else "❌ Couldn't send the reply.")
+        return 0 if ok else 1
     if cmd == "allow":
         scope = (argv[:1] or ["once"])[0]
         code, body = http("POST", "/decision", {"decision": "allow", "scope": scope})

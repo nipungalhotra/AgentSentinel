@@ -1112,8 +1112,16 @@ final class PermissionPopupController {
     }
 
     @discardableResult
+    /// Decisions from outside the card (HTTP /allow, Shortcuts, CLI, phone) never widen a high-risk
+    /// request beyond "allow once": "10 min" and "always" for those need the card (and Touch ID).
+    static func clamp(_ decision: Decision, for request: PermissionRequest) -> Decision {
+        if request.risk == .high, case .allow(let scope) = decision, scope != .once { return .allow(.once) }
+        return decision
+    }
+
     func submitExternalDecision(_ decision: Decision, forRequestId requestId: String? = nil) -> Bool {
         if let model = activeModel {
+            let decision = Self.clamp(decision, for: model.request)
             if let reqId = requestId, !reqId.isEmpty, reqId.lowercased() != "latest",
                model.request.id.uuidString.caseInsensitiveCompare(reqId) != .orderedSame {
                 return false
@@ -1130,6 +1138,7 @@ final class PermissionPopupController {
                 return false
             }
             self.activeRequest = nil
+            let decision = Self.clamp(decision, for: first.request)
             for c in first.continuations {
                 c.resume(returning: decision)
             }

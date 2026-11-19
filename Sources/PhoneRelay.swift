@@ -121,6 +121,41 @@ final class PhoneRelay {
         return "lg1e " + (nonce + cipher + tag).base64EncodedString()
     }
 
+    /// Opens a message sealed by `seal` (or by loggdin Pocket, which uses the same keys). `prefix` is
+    /// "lg1e " for requests and "lg1t " for typed replies from the phone. nil when the key is wrong or
+    /// the message was changed on the way.
+    nonisolated static func open(_ text: String, secret: String, prefix: String = "lg1e ") -> [String: Any]? {
+        guard text.hasPrefix(prefix), let raw = Data(base64Encoded: String(text.dropFirst(prefix.count))), raw.count >= 33 else { return nil }
+        let pk = Data(pairKey(secret: secret).utf8)
+        let encKey = hmac(pk, Data("loggdin-phone|v1|enc".utf8))
+        let macKey = hmac(pk, Data("loggdin-phone|v1|mac".utf8))
+        let nonce = raw.prefix(16)
+        let cipher = raw.dropFirst(16).dropLast(16)
+        let tag = Array(raw.suffix(16))
+        let expected = Array(hmac(macKey, Data(nonce) + Data(cipher)).prefix(16))
+        var diff: UInt8 = 0
+        for i in 0..<16 { diff |= expected[i] ^ tag[i] }
+        guard diff == 0 else { return nil }
+        var stream = Data()
+        var counter: UInt32 = 0
+        while stream.count < cipher.count {
+            var be = counter.bigEndian
+            stream += hmac(encKey, Data(nonce) + Data(bytes: &be, count: 4))
+            counter += 1
+        }
+        let plain = Data(zip(cipher, stream).map { $0 ^ $1 })
+        return (try? JSONSerialization.jsonObject(with: plain)) as? [String: Any]
+    }
+
+    /// "lg1t <sealed {i: request id, x: text}>": a reply typed in loggdin Pocket for a finished agent.
+    /// {i, stop: true} is "let it stop" (text nil).
+    nonisolated static func parseTextReply(_ text: String, secret: String) -> (id: String, text: String?)? {
+        guard let obj = open(text, secret: secret, prefix: "lg1t "), let id = obj["i"] as? String else { return nil }
+        if obj["stop"] as? Bool == true { return (id, nil) }
+        guard let body = obj["x"] as? String, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return (id, body)
+    }
+
     /// What a person types into loggdin Pocket when they can't scan: "<topic>.<pairing key>".
     nonisolated static func pairingCode(_ cfg: PhoneConfig) -> String {
         "\(cfg.topic).\(pairKey(secret: cfg.secret))"
@@ -298,6 +333,36 @@ final class PhoneRelay {
     func questionFinished(_ q: AgentQuestion) {
         guard let cfg = pushedQuestions.removeValue(forKey: q.id) else { return }
         Task { await Self.send(method: "PUT", url: "\(cfg.serverURL)/\(cfg.topic)/\(Self.sequenceId(q.id))/clear", body: nil) }
+    }
+
+    private var pushedReplies: [String: PhoneConfig] = [:]
+
+    /// A finished agent waiting for a reply: straight to the phone when away or in phone-first modes,
+    /// otherwise after the usual delay if the card is still unanswered.
+    func replyPresented(_ r: AgentReply) {
+        guard isActive, let cfg = config else { return }
+        let delay = (userAway || cfg.mode != "auto") ? 0 : cfg.pushAfter
+        Task { @MainActor in
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard ReplyController.shared.isAsking(id: r.id), let cfg = self.config, cfg.enabled else { return }
+            if await Self.publishReply(cfg, r) { self.pushedReplies[r.id] = cfg }
+        }
+    }
+
+    func replyFinished(_ r: AgentReply) {
+        guard let cfg = pushedReplies.removeValue(forKey: r.id) else { return }
+        Task { await Self.send(method: "PUT", url: "\(cfg.serverURL)/\(cfg.topic)/\(Self.sequenceId(r.id))/clear", body: nil) }
+    }
+
+    nonisolated private static func publishReply(_ cfg: PhoneConfig, _ r: AgentReply) async -> Bool {
+        let folder = folderName(r.directory)
+        var message = r.message
+        if cfg.details == "minimal" { message = "Finished its turn." }
+        // "w": how long this computer waits for the reply, in seconds, so the phone's countdown matches.
+        guard let sealed = seal(["k": "r", "i": r.id, "t": "\(r.agent) finished", "m": "\(message)\nFolder: \(folder)",
+                                 "w": ReplySettings.waitMinutes * 60, "h": false, "a": [[String]]()], secret: cfg.secret) else { return false }
+        return await deliver(cfg, sealed: sealed, seq: sequenceId(r.id), priority: 4,
+                             expoTitle: "\(r.agent) finished", expoBody: "In \(folder). Reply to keep it working.")
     }
 
     func noticePresented(agent: String, title: String, message: String, directory: String) {
@@ -509,6 +574,10 @@ final class PhoneRelay {
                     guard let text = obj["message"] as? String else { continue }
                     if let token = parsePushRegistration(text, secret: cfg.secret) {
                         await MainActor.run { PhoneRelay.shared.registerPushToken(token) }
+                        continue
+                    }
+                    if let typed = parseTextReply(text, secret: cfg.secret) {
+                        await MainActor.run { _ = ReplyController.shared.submitFromPhone(id: typed.id, text: typed.text) }
                         continue
                     }
                     if let pick = parseOptionReply(text, secret: cfg.secret) {

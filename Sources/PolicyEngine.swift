@@ -31,7 +31,7 @@ final class PolicyEngine {
             "/.aws",
             "/.gnupg"
         ]
-        return sensitiveContainments.contains { p.contains($0) }
+        return sensitiveContainments.contains { p.contains($0) } || RiskScorer.touchesSelfProtected(p)
     }
 
     /// Evaluates if targetPath violates the workspace jail boundary
@@ -60,9 +60,9 @@ final class PolicyEngine {
         guard let ws = workspaceRoot, !ws.isEmpty, ws != "~" else { return nil }
         let expandedWS = (ws as NSString).expandingTildeInPath
 
-        // If target doesn't start with workspace root and isn't /tmp or /var/folders
-        let isInside = expandedTarget.hasPrefix(expandedWS)
-        let isTemp = expandedTarget.hasPrefix("/tmp") || expandedTarget.hasPrefix("/var/folders")
+        // Whole path components, after resolving ".." (so /proj-evil and /proj/../x are outside /proj).
+        let isInside = RulesEngine.isWithin(expandedTarget, base: expandedWS)
+        let isTemp = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"].contains { RulesEngine.isWithin(expandedTarget, base: $0) }
         if !isInside && !isTemp {
             return "Path escapes workspace jail: \(targetPath)"
         }

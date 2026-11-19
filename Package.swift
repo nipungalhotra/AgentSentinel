@@ -13,6 +13,12 @@ let package = Package(
         .executableTarget(
             name: "loggdin",
             path: "Sources"
+        ),
+        // Unit tests for the parts that decide what gets through: risk scoring, scopes, phone crypto.
+        .testTarget(
+            name: "loggdinTests",
+            dependencies: ["loggdin"],
+            path: "tests/loggdinTests"
         )
     ]
 )

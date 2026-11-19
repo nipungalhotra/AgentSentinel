@@ -67,14 +67,14 @@ final class RulesEngine {
     }
 
     /// Developer tools whose whole family may be approved at once ("allow git in this project").
-    /// Any other command is only ever approved as that exact command.
+    /// Any other command is only ever approved as that exact command. Interpreters (python, node,
+    /// deno), downloaders (curl, wget), container runtimes and package runners (npx, uv, make…) are
+    /// left out on purpose: approving the family would approve any code they can be told to run.
     static let knownToolFamilies: Set<String> = [
-            "git", "npm", "npx", "yarn", "pnpm", "bun",
+            "git", "npm", "yarn", "pnpm",
             "cargo", "rustc", "swift", "xcodebuild",
-            "python", "python3", "pytest", "pip", "pip3", "poetry", "uv",
-            "docker", "docker-compose", "podman",
-            "brew", "curl", "wget", "gh", "terraform", "go", "make", "cmake", "ctest",
-            "node", "deno", "ts-node", "tsc", "eslint", "prettier"
+            "pytest", "pip", "pip3", "poetry",
+            "gh", "go", "ctest", "tsc", "eslint", "prettier"
     ]
 
     /// True when `path` is `base` or inside it (path-component aware; "*" means anywhere).
@@ -178,12 +178,8 @@ final class RulesEngine {
         let parts = target.split(separator: " ").map(String.init)
         guard let first = parts.first?.lowercased() else { return clean }
 
-        let effectiveFirst: String
-        if (first == "sudo" || first == "env") && parts.count > 1 {
-            effectiveFirst = parts[1].lowercased()
-        } else {
-            effectiveFirst = first
-        }
+        // `sudo git …` is not `git …`: never strip sudo/env, so a git grant can't cover it.
+        let effectiveFirst = first
 
         if effectiveFirst == "write" || effectiveFirst == "edit" || effectiveFirst == "inspect" || effectiveFirst == "modify" {
             return "file_mod"
@@ -218,15 +214,15 @@ final class RulesEngine {
 
         let cmd = request.plainCommand.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 0. Deduplicate: if this exact command was approved in the last 15 seconds, auto-allow immediately
-        if isRecentlyApproved(command: cmd, directory: request.directory) {
-            recordDecision(request: request, decision: .allow(.once), autoAllowed: true)
-            return .allow(.once)
-        }
-
-        // Catastrophic root destructive operations cannot be automatically bypassed
+        // Catastrophic and high-risk commands are never replayed from the 15-second dedup cache.
         if isCatastrophicDestructive(cmd) {
             return nil
+        }
+
+        // 0. Deduplicate: this exact low/medium-risk command was approved in the last 15 seconds.
+        if request.risk != .high && isRecentlyApproved(command: cmd, directory: request.directory) {
+            recordDecision(request: request, decision: .allow(.once), autoAllowed: true)
+            return .allow(.once)
         }
 
         let family = toolFamily(for: cmd)
@@ -257,7 +253,7 @@ final class RulesEngine {
     // MARK: - Recording
 
     func recordDecision(request: PermissionRequest, decision: Decision, autoAllowed: Bool = false, via: String? = nil) {
-        if decision.isAllowed {
+        if decision.isAllowed && request.risk != .high {
             recordRecentApproval(command: request.plainCommand, directory: request.directory)
         }
 
