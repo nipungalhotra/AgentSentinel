@@ -7,7 +7,7 @@ name: Website (GitHub Pages)
 on:
   push:
     branches: [ main ]
-    paths: [ "website/**", "packaging/install-mac.sh", ".github/workflows/pages.yml" ]
+    paths: [ "website/**", "mobile/**", "packaging/install-mac.sh", ".github/workflows/pages.yml" ]
   workflow_dispatch:
 
 permissions:
@@ -39,6 +39,21 @@ jobs:
 
       - name: Publish the macOS installer at nipungalhotra.github.io/AgentSentinel/install.sh
         run: cp packaging/install-mac.sh website/install.sh
+
+      # loggdin Pocket on the web: the pairing QR code and link on the computer open this page.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Build loggdin Pocket for the web at nipungalhotra.github.io/AgentSentinel/app/
+        working-directory: mobile
+        run: |
+          npm ci
+          npx expo export --platform web --output-dir dist
+          mkdir -p ../website/app
+          cp -R dist/. ../website/app/
+          test -f ../website/app/index.html
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

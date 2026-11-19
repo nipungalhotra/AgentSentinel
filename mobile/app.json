@@ -45,6 +45,9 @@
       "expo-notifications",
       "expo-font"
     ],
-    "backgroundColor": "#e8e5de"
+    "backgroundColor": "#e8e5de",
+    "experiments": {
+      "baseUrl": "/AgentSentinel/app"
+    }
   }
 }
