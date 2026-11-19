@@ -124,7 +124,7 @@ jobs:
             console.log('ok: sealed request opens only with the pairing key');
           });"
 
-      - name: Web build (app.loggdin.com)
+      - name: Web build (GitHub Pages, /AgentSentinel/app)
         run: npx expo export --platform web
 
   portable:

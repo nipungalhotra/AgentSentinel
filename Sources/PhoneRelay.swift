@@ -61,7 +61,7 @@ final class PhoneRelay {
     nonisolated static let defaultServer = "https://ntfy.sh"
     /// The loggdin phone app on the web (mobile/). A pairing link puts the topic after "#",
     /// which browsers never send to the server.
-    nonisolated static let phoneAppURL = "https://app.loggdin.com"
+    nonisolated static let phoneAppURL = "https://nipungalhotra.github.io/AgentSentinel/app"
 
     nonisolated static let expoPushURL = "https://exp.host/--/api/v2/push/send"
     nonisolated static let maxPushTokens = 5

@@ -41,7 +41,8 @@ function splitCode(code: string): { topic: string; key?: string } | null {
 export function parsePairing(input: string): Pairing | null {
   let text = input.trim();
   // The computer's QR code is a link to the web app with the pairing after "#": use that part.
-  const hash = /^https?:\/\/[^/\s#]+\/?#(.+)$/.exec(text);
+  // The web app may live under a path (https://nipungalhotra.github.io/AgentSentinel/app/#…).
+  const hash = /^https?:\/\/[^\s#]+#(.+)$/.exec(text);
   if (hash) text = decodeURIComponent(hash[1]);
   const direct = splitCode(text);
   if (direct) return { server: DEFAULT_SERVER, ...direct };

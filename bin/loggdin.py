@@ -56,7 +56,7 @@ from urllib.parse import parse_qs, urlparse
 import urllib.request
 import urllib.error
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 DEFAULT_PORT = 9191
 PORT_RANGE = 10                      # 9191..9200 if the default is taken
 ASK_TIMEOUT = float(os.environ.get("LOGGDIN_TIMEOUT", "115"))  # agents allow 120s
@@ -670,6 +670,7 @@ button.primary{background:var(--btn);border-color:var(--btn);color:#fff}button.d
 # ---------------------------------------------------------------------------
 
 PHONE_DEFAULT_SERVER = "https://ntfy.sh"
+PHONE_APP_URL = "https://nipungalhotra.github.io/AgentSentinel/app"  # loggdin Pocket on the web (GitHub Pages, built from mobile/)
 PHONE_TOPIC_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"   # no 0/o/1/l: easy to type on a phone
 PHONE_VERBS = {"allow-once": ("allow", "once"), "allow-10m": ("allow", "10m"), "deny": ("deny", "")}
 
@@ -2970,9 +2971,9 @@ def cmd_phone(argv):
         print("📱 Phone approvals are ON.\n")
         code = phone_pairing_code(cfg)
         target = code if cfg["server"] == PHONE_DEFAULT_SERVER else f"{cfg['server']}/{code}"
-        print("1. Install loggdin Pocket on your phone, or open https://app.loggdin.com")
+        print("1. Install loggdin Pocket on your phone, or open " + PHONE_APP_URL)
         print("2. Type this pairing code in it (or open the link on your phone):")
-        print(f"\n       {code}\n       https://app.loggdin.com/#{target}\n")
+        print(f"\n       {code}\n       {PHONE_APP_URL}/#{target}\n")
         print("   Treat the code like a password. Requests are encrypted with it end to end,")
         print("   so the relay and anyone who only knows the topic can't read or answer them.")
         print("3. Run 'loggdin phone test' and answer on your phone.\n")

@@ -31,7 +31,7 @@ export async function removeItem(key: string): Promise<void> {
 }
 
 /**
- * On the web a pairing link looks like https://app.loggdin.com/#loggdin-…: the topic sits after
+ * On the web a pairing link looks like https://nipungalhotra.github.io/AgentSentinel/app/#loggdin-…: the topic sits after
  * the "#", which browsers never send to the server. It is read once and removed from the address bar.
  */
 export function takePairingFromLink(): string | null {
