@@ -5,6 +5,7 @@ import {
   AppState,
   Easing,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -56,6 +57,21 @@ export default function App() {
     await saveItem(STORE_KEY, JSON.stringify(p));
     setPairing(p);
   }, []);
+
+  // Native: a pairing link (com.loggdin.app://pair#loggdin-…, e.g. sent by AirDrop or opened from
+  // `loggdin phone setup`) pairs the app. Only while unpaired, so a link someone sends you can't
+  // quietly switch this phone to another computer.
+  useEffect(() => {
+    if (Platform.OS === 'web' || pairing !== null) return;
+    const fromLink = (url?: string | null) => {
+      const hash = url && url.includes('#') ? decodeURIComponent(url.slice(url.indexOf('#') + 1)) : '';
+      const p = parsePairing(hash);
+      if (p) pair(p);
+    };
+    Linking.getInitialURL().then(fromLink).catch(() => {});
+    const sub = Linking.addEventListener('url', ({ url }) => fromLink(url));
+    return () => sub.remove();
+  }, [pairing, pair]);
 
   const unpair = useCallback(async () => {
     await removeItem(STORE_KEY);
