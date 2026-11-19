@@ -12,8 +12,42 @@ const K = new Uint32Array([
   0xc67178f2,
 ]);
 
+// UTF-8 by hand: TextEncoder/TextDecoder are browser APIs that React Native's Hermes engine doesn't
+// fully provide, and a missing decoder made every sealed request silently unreadable on the phone.
 function utf8(s: string): Uint8Array {
-  return new TextEncoder().encode(s);
+  const out: number[] = [];
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0xfffd;
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return Uint8Array.from(out);
+}
+
+export function fromUtf8(b: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < b.length; ) {
+    const x = b[i];
+    let c: number;
+    let n: number;
+    if (x < 0x80) [c, n] = [x, 1];
+    else if (x >> 5 === 6) [c, n] = [x & 31, 2];
+    else if (x >> 4 === 14) [c, n] = [x & 15, 3];
+    else if (x >> 3 === 30) [c, n] = [x & 7, 4];
+    else [c, n] = [0xfffd, 1];
+    if (n > 1) {
+      if (i + n > b.length) {
+        s += '\ufffd';
+        break;
+      }
+      for (let k = 1; k < n; k++) c = (c << 6) | (b[i + k] & 63);
+    }
+    s += String.fromCodePoint(c);
+    i += n;
+  }
+  return s;
 }
 
 export function sha256(data: Uint8Array): Uint8Array {
@@ -111,7 +145,7 @@ export function openSealed(pairKey: string, text: string): unknown {
     for (let i = 0; i < 32 && block * 32 + i < cipher.length; i++) plain[block * 32 + i] = cipher[block * 32 + i] ^ stream[i];
   }
   try {
-    return JSON.parse(new TextDecoder().decode(plain));
+    return JSON.parse(fromUtf8(plain));
   } catch {
     return null;
   }
