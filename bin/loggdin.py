@@ -125,6 +125,18 @@ def ensure_private_dir(path):
             pass
 
 
+def open_private_log(path):
+    """Append-only log readable only by you (logs hold the commands your agents ran)."""
+    ensure_private_dir(os.path.dirname(path))
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    if not IS_WINDOWS:
+        try:
+            os.fchmod(fd, 0o600)      # tighten logs created by older versions
+        except OSError:
+            pass
+    return os.fdopen(fd, "ab")
+
+
 def write_private(path, text):
     ensure_private_dir(os.path.dirname(path))
     tmp = path + ".tmp"
@@ -1262,11 +1274,7 @@ def load_settings():
 
 def save_settings(changes):
     s = dict(load_settings(), **changes)
-    os.makedirs(state_dir(), exist_ok=True)
-    tmp = settings_path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(s, f, indent=2)
-    os.replace(tmp, settings_path())
+    write_private(settings_path(), json.dumps(s, indent=2))
     return s
 
 
@@ -1289,10 +1297,56 @@ def user_idle_seconds():
             return int(m.group(1)) / 1e9 if m else None
         if shutil.which("xprintidle"):
             out = subprocess.run(["xprintidle"], capture_output=True, text=True, timeout=2).stdout.strip()
-            return int(out) / 1000.0 if out.isdigit() else None
+            if out.isdigit():
+                return int(out) / 1000.0
+        if os.environ.get("WAYLAND_DISPLAY") and shutil.which("gdbus"):
+            # GNOME on Wayland: Mutter's idle monitor ("(uint64 1234,)" in milliseconds).
+            out = subprocess.run(["gdbus", "call", "--session", "--dest", "org.gnome.Mutter.IdleMonitor",
+                                  "--object-path", "/org/gnome/Mutter/IdleMonitor/Core",
+                                  "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"],
+                                 capture_output=True, text=True, timeout=2).stdout
+            m = re.search(r"uint64 (\d+)", out)
+            if m:
+                return int(m.group(1)) / 1000.0
+        if os.environ.get("DISPLAY"):
+            return _x11_idle_seconds()
     except Exception:
         return None
     return None
+
+
+def _x11_idle_seconds():
+    """X11 idle time through libXss (installed with every X desktop), so xprintidle isn't needed."""
+    import ctypes
+    import ctypes.util
+
+    class XScreenSaverInfo(ctypes.Structure):
+        _fields_ = [("window", ctypes.c_ulong), ("state", ctypes.c_int), ("kind", ctypes.c_int),
+                    ("til_or_since", ctypes.c_ulong), ("idle", ctypes.c_ulong), ("eventMask", ctypes.c_ulong)]
+
+    xlib = ctypes.cdll.LoadLibrary(ctypes.util.find_library("X11") or "libX11.so.6")
+    xss = ctypes.cdll.LoadLibrary(ctypes.util.find_library("Xss") or "libXss.so.1")
+    xlib.XOpenDisplay.argtypes, xlib.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+    xlib.XDefaultRootWindow.argtypes, xlib.XDefaultRootWindow.restype = [ctypes.c_void_p], ctypes.c_ulong
+    xlib.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    xlib.XFree.argtypes = [ctypes.c_void_p]
+    xss.XScreenSaverAllocInfo.restype = ctypes.POINTER(XScreenSaverInfo)
+    xss.XScreenSaverQueryInfo.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(XScreenSaverInfo)]
+    dpy = xlib.XOpenDisplay(None)
+    if not dpy:
+        return None
+    try:
+        info = xss.XScreenSaverAllocInfo()
+        if not info:
+            return None
+        try:
+            if not xss.XScreenSaverQueryInfo(dpy, xlib.XDefaultRootWindow(dpy), info):
+                return None
+            return info.contents.idle / 1000.0
+        finally:
+            xlib.XFree(info)
+    finally:
+        xlib.XCloseDisplay(dpy)
 
 
 AWAY_SECONDS = 60
@@ -1596,6 +1650,13 @@ class Daemon:
 
     def serve(self):
         daemon = self
+        if not IS_WINDOWS:
+            # Files written by older versions were readable by other users; logs hold your agents' commands.
+            for name in ("daemon.log", "popup.log", "settings.json"):
+                try:
+                    os.chmod(os.path.join(state_dir(), name), 0o600)
+                except OSError:
+                    pass
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "loggdin"
@@ -1828,6 +1889,14 @@ class Daemon:
                     os.unlink(self.unix_path)
             except OSError:
                 pass
+            # Take the card process down with us: on a restart (upgrade) the new daemon comes back
+            # within a second, so the old card would reconnect and every request would get two cards.
+            card = _popup.get("proc")
+            if card is not None and card.poll() is None:
+                try:
+                    card.terminate()
+                except Exception:
+                    pass
             log("loggdin stopped.")
         return 0
 
@@ -1895,7 +1964,7 @@ def python_exe(windowed=False):
 
 def spawn_daemon():
     ensure_private_dir(state_dir())
-    logf = open(os.path.join(state_dir(), "daemon.log"), "ab")
+    logf = open_private_log(os.path.join(state_dir(), "daemon.log"))
     args = [python_exe(windowed=True), os.path.abspath(__file__), "daemon"]
     kw = dict(stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True)
     if IS_WINDOWS:
@@ -2358,7 +2427,7 @@ def ensure_popup():
             return True
         try:
             ensure_private_dir(state_dir())
-            logf = open(os.path.join(state_dir(), "popup.log"), "ab")
+            logf = open_private_log(os.path.join(state_dir(), "popup.log"))
             args = [python_exe(windowed=True), os.path.abspath(__file__), "popup",
                     "--port", str(_popup["port"] or get_port())]
             kw = dict(stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, close_fds=True)
@@ -3515,6 +3584,18 @@ def main(argv=None):
             return 0
         ok = spawn_daemon()
         print(f"🛡️ loggdin started on port {get_port()}." if ok else
+              f"❌ loggdin failed to start; see {os.path.join(state_dir(), 'daemon.log')}")
+        return 0 if ok else 1
+    if cmd == "restart":
+        # Used by the installers, so an upgrade runs the new code at once instead of after the next login.
+        if is_running():
+            http("POST", "/shutdown", {})
+            for _ in range(50):
+                if not is_running():
+                    break
+                time.sleep(0.1)
+        ok = spawn_daemon()
+        print(f"🛡️ loggdin restarted on port {get_port()}." if ok else
               f"❌ loggdin failed to start; see {os.path.join(state_dir(), 'daemon.log')}")
         return 0 if ok else 1
     if cmd == "stop":

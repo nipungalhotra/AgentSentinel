@@ -66,6 +66,60 @@ class RiskScoringTest(unittest.TestCase):
             self.assertEqual(daemon.score_risk(cmd), want, f"daemon: {cmd}")
 
 
+class LinuxGapsTest(unittest.TestCase):
+    """Found installing on Kali: logs readable by others, upgrades kept running old code, and
+    "reply when away" never triggered without xprintidle."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="lgl")
+        self.old = os.environ.get("LOGGDIN_HOME")
+        os.environ["LOGGDIN_HOME"] = self.tmp
+        self.d = load(DAEMON, "daemon_linux_gaps")
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("LOGGDIN_HOME", None)
+        else:
+            os.environ["LOGGDIN_HOME"] = self.old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permissions")
+    def test_logs_and_settings_are_private(self):
+        log_path = os.path.join(self.tmp, "daemon.log")
+        open(log_path, "w").close()
+        os.chmod(log_path, 0o644)                       # as written by older versions
+        self.d.open_private_log(log_path).close()
+        self.assertEqual(os.stat(log_path).st_mode & 0o777, 0o600)
+        self.d.save_settings({"replyMode": "always"})
+        self.assertEqual(os.stat(os.path.join(self.tmp, "settings.json")).st_mode & 0o777, 0o600)
+
+    def test_restart_command_exists_and_installers_use_it(self):
+        src = open(DAEMON, encoding="utf-8").read()
+        self.assertIn('if cmd == "restart":', src)
+        for f in ("install.sh", "install.ps1"):
+            text = open(os.path.join(ROOT, "packaging", f), encoding="utf-8").read()
+            self.assertRegex(text, r"loggdin\.py\"? restart|\$Script restart", f)
+
+    def test_idle_falls_back_without_xprintidle(self):
+        if sys.platform in ("darwin", "win32"):
+            self.skipTest("Linux idle detection")
+        calls = []
+        orig_which, orig_x11 = self.d.shutil.which, self.d._x11_idle_seconds
+        self.d.shutil.which = lambda name: None          # no xprintidle, no gdbus
+        self.d._x11_idle_seconds = lambda: calls.append(1) or 42.0
+        old_display = os.environ.get("DISPLAY")
+        os.environ["DISPLAY"] = ":0"
+        try:
+            self.assertEqual(self.d.user_idle_seconds(), 42.0)
+            self.assertEqual(calls, [1])
+        finally:
+            self.d.shutil.which, self.d._x11_idle_seconds = orig_which, orig_x11
+            if old_display is None:
+                os.environ.pop("DISPLAY", None)
+            else:
+                os.environ["DISPLAY"] = old_display
+
+
 class ReplyCardTest(unittest.TestCase):
     """The Windows/Linux approval card (tkinter): a finished agent's message, a text box, Send / Let it stop."""
 
