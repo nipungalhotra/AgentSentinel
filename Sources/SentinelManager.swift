@@ -61,6 +61,13 @@ final class SentinelManager: NSObject {
             )
         }
 
+        // Paused for this agent (dashboard): allow and log everything below high risk.
+        if !forcePrompt, activeRequest.risk != .high, SessionTracker.shared.isPaused(activeRequest.requestedBy) {
+            rulesEngine.recordDecision(request: activeRequest, decision: .allow(.once), autoAllowed: true, via: "paused")
+            lastDecisionSummary = "Allowed (agent paused): \(activeRequest.plainCommand)"
+            return .allow(.once)
+        }
+
         // 1. Check rules and active grants (Catastrophic commands like rm -rf / are guarded in RulesEngine)
         if !forcePrompt, let autoDecision = rulesEngine.evaluate(request: activeRequest) {
             lastDecisionSummary = "Auto-\(autoDecision.summary): \(activeRequest.plainCommand)"
@@ -88,6 +95,9 @@ final class SentinelManager: NSObject {
         }
 
         pendingCount = max(0, pendingCount - 1)
+        SessionTracker.shared.record(event: decision.isAllowed ? "PreToolUse" : "Stop", agent: activeRequest.requestedBy,
+                                     sessionId: nil, directory: activeRequest.directory,
+                                     detail: decision.isAllowed ? "Allowed: " + String(activeRequest.plainCommand.prefix(60)) : "Denied")
         lastDecisionSummary = "\(decision.summary): \(activeRequest.plainCommand)"
         updateMenuBar()
 
@@ -126,17 +136,21 @@ final class SentinelManager: NSObject {
         agentsHeader.isEnabled = false
         menu.addItem(agentsHeader)
 
-        let claudeItem = NSMenuItem(title: "● Claude Code (Active)", action: nil, keyEquivalent: "")
-        claudeItem.isEnabled = false
-        menu.addItem(claudeItem)
-
-        let antigravityItem = NSMenuItem(title: "● Antigravity (Gated)", action: nil, keyEquivalent: "")
-        antigravityItem.isEnabled = false
-        menu.addItem(antigravityItem)
-
-        let cursorItem = NSMenuItem(title: "● Cursor (Idle)", action: nil, keyEquivalent: "")
-        cursorItem.isEnabled = false
-        menu.addItem(cursorItem)
+        // Real sessions (from the hooks' activity events), not a fixed list.
+        let sessions = SessionTracker.shared.visible.prefix(5)
+        if sessions.isEmpty {
+            let none = NSMenuItem(title: "No agent sessions yet", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+        for s in sessions {
+            let dot = s.state == .working ? "🟢" : s.state == .waiting ? "🟠" : s.state == .finished ? "🔵" : "⚪️"
+            let paused = SessionTracker.shared.isPaused(s.agent) ? " · paused" : ""
+            let item = NSMenuItem(title: "\(dot) \(s.agent) · \(s.folder) (\(s.state.rawValue)\(paused))",
+                                  action: #selector(openDashboardAction), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -286,4 +300,9 @@ final class SentinelManager: NSObject {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+}
+
+extension SentinelManager {
+    /// Called by SessionTracker (debounced) so the menu's sessions list stays current.
+    func refreshSessionsMenu() { rebuildMenu() }
 }

@@ -4,7 +4,7 @@
 // holds the signing secret, so it cannot forge an answer for another request. Requests and their
 // buttons arrive sealed ("lg1e …") and open only with the pairing key from the QR code.
 
-import { openSealed } from './hmac';
+import { openSealed, seal } from './hmac';
 
 /** `key` is the pairing key from the QR code (or a typed pairing code); without it the phone can't
  * open requests or register for notifications. */
@@ -20,9 +20,14 @@ export type PhoneRequest = {
   /** When the computer sent it, in ms. */
   at: number;
   high: boolean;
-  /** permission: allow/deny a command; question: pick an option; notice: nothing to answer. */
-  kind: 'permission' | 'question' | 'notice';
+  /** permission: allow/deny a command; question: pick an option; notice: nothing to answer;
+   * reply: an agent finished, and what you type keeps it working. */
+  kind: 'permission' | 'question' | 'notice' | 'reply';
   actions: ReplyAction[];
+  /** For a reply: the computer's request id the typed answer is bound to. */
+  replyId?: string;
+  /** For a reply: how long the computer waits for it, in ms. */
+  waitMs?: number;
 };
 
 const DEFAULT_SERVER = 'https://ntfy.sh';
@@ -66,7 +71,23 @@ export async function sendReply(action: ReplyAction): Promise<boolean> {
   }
 }
 
-type Sealed = { k?: unknown; t?: unknown; m?: unknown; h?: unknown; a?: unknown };
+type Sealed = { k?: unknown; t?: unknown; m?: unknown; h?: unknown; a?: unknown; i?: unknown; w?: unknown };
+
+/**
+ * Sends a reply typed on the phone to a finished agent, or "let it stop" when `text` is null. Sealed
+ * with the pairing key, so the relay can't read it and nobody without the key can forge one; the
+ * computer accepts it only for the request it is waiting on.
+ */
+export async function sendText(p: Pairing, replyId: string, text: string | null): Promise<boolean> {
+  if (!p.key) return false;
+  const body = 'lg1t ' + seal(p.key, text === null ? { i: replyId, stop: true } : { i: replyId, x: text.slice(0, 4000) });
+  try {
+    const res = await fetch(`${p.server}/${p.topic}-reply`, { method: 'POST', body });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 /** Requests arrive sealed; only the pairing key from the QR code or pairing code opens them. */
 function toRequest(msg: any, p: Pairing): PhoneRequest | null | 'locked' {
@@ -78,8 +99,9 @@ function toRequest(msg: any, p: Pairing): PhoneRequest | null | 'locked' {
     const actions: ReplyAction[] = s.a
       .filter((x): x is [string, string] => Array.isArray(x) && typeof x[0] === 'string' && typeof x[1] === 'string')
       .map(([label, body]) => ({ label, body, method: 'POST', url: `${p.server}/${p.topic}-reply` }));
-    const kind = s.k === 'q' ? 'question' : s.k === 'n' ? 'notice' : 'permission';
+    const kind = s.k === 'q' ? 'question' : s.k === 'n' ? 'notice' : s.k === 'r' ? 'reply' : 'permission';
     if (!actions.length && kind === 'permission') return null;
+    if (kind === 'reply' && typeof s.i !== 'string') return null;
     return {
       seq: String(msg.sequence_id ?? msg.id),
       title: typeof s.t === 'string' ? s.t : 'Permission request',
@@ -88,6 +110,8 @@ function toRequest(msg: any, p: Pairing): PhoneRequest | null | 'locked' {
       high: s.h === true,
       kind,
       actions,
+      replyId: kind === 'reply' ? (s.i as string) : undefined,
+      waitMs: kind === 'reply' && typeof s.w === 'number' && s.w > 0 ? Math.min(s.w, 3600) * 1000 : undefined,
     };
   }
   if (!Array.isArray(msg.actions)) return null;
@@ -120,6 +144,13 @@ export function connect(p: Pairing, h: Handlers): () => void {
   let socket: WebSocket | null = null;
   let retry: ReturnType<typeof setTimeout> | null = null;
   let backoff = 1000;
+  // The relay sends a keepalive about every 45 s. A socket that goes quiet for longer (network
+  // change, laptop asleep, phone in the background) can still look open, so treat silence as a
+  // drop and reconnect instead of showing "Connected" while requests are missed.
+  let lastSeen = Date.now();
+  const watchdog = setInterval(() => {
+    if (!closed && socket && socket.readyState === WebSocket.OPEN && Date.now() - lastSeen > 100_000) socket.close();
+  }, 15_000);
 
   const open = () => {
     if (closed) return;
@@ -128,10 +159,12 @@ export function connect(p: Pairing, h: Handlers): () => void {
     const ws = new WebSocket(url);
     socket = ws;
     ws.onopen = () => {
+      lastSeen = Date.now();
       backoff = 1000;
       h.onStatus(true);
     };
     ws.onmessage = (event) => {
+      lastSeen = Date.now();
       let msg: any;
       try {
         msg = JSON.parse(String(event.data));
@@ -158,6 +191,7 @@ export function connect(p: Pairing, h: Handlers): () => void {
   open();
   return () => {
     closed = true;
+    clearInterval(watchdog);
     if (retry) clearTimeout(retry);
     socket?.close();
   };

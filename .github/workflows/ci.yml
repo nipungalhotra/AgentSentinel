@@ -52,6 +52,9 @@ jobs:
         run: |
           swift build -c release
 
+      - name: Swift unit tests (risk scoring, scopes, phone crypto)
+        run: swift test
+
       - name: Run Comprehensive Test Suites
         run: |
           chmod +x tests/*.sh
@@ -124,6 +127,21 @@ jobs:
             console.log('ok: sealed request opens only with the pairing key');
           });"
 
+      - name: A reply typed on the phone opens on the computer (and only with the pairing key)
+        working-directory: .
+        run: |
+          KEY=$(python3 -c "import importlib.util as u; s=u.spec_from_file_location('lg','bin/loggdin.py'); m=u.module_from_spec(s); s.loader.exec_module(m); print(m.phone_pair_key('s3cret'))")
+          cd mobile && node --experimental-strip-types -e "
+          import('./src/hmac.ts').then((m) => { process.stdout.write('lg1t ' + m.seal('$KEY', { i: 'REQ-9', x: 'Open the PR' })); });" > /tmp/reply.txt
+          cd .. && python3 - <<'PY2'
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("lg", "bin/loggdin.py"); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          text = open("/tmp/reply.txt").read()
+          assert m.phone_parse_text({"topic": "loggdin-abcdefgh2345", "secret": "s3cret"}, text) == ("REQ-9", "Open the PR"), "computer could not open the phone's reply"
+          assert m.phone_parse_text({"topic": "loggdin-abcdefgh2345", "secret": "other"}, text) is None, "wrong key opened a reply"
+          print("ok: phone reply opens on the computer only with the pairing key")
+          PY2
+
       - name: Web build (GitHub Pages, /AgentSentinel/app)
         run: npx expo export --platform web
 
@@ -173,6 +191,7 @@ jobs:
           python tests/test_components_robustness.py
           python tests/test_rules_engine_logic.py
           python tests/test_mcp_server.py
+          python tests/test_continue_and_security.py
           node tests/test_sdk_node.js
 
       - name: Installer smoke test (Linux)

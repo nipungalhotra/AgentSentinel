@@ -5,6 +5,7 @@ import {
   AppState,
   Easing,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -18,7 +19,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Archivo_400Regular, Archivo_500Medium, Archivo_600SemiBold, Archivo_700Bold, useFonts } from '@expo-google-fonts/archivo';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
-import { connect, isSafeReply, parsePairing, sendReply, type Pairing, type PhoneRequest } from './src/relay';
+import { connect, isSafeReply, parsePairing, sendReply, sendText, type Pairing, type PhoneRequest } from './src/relay';
 import { loadItem, removeItem, saveItem, takePairingFromLink } from './src/storage';
 import { registerForPush, type PushState } from './src/push';
 import { font, u, useTheme } from './src/theme';
@@ -27,6 +28,9 @@ import { Faceplate, Key, Lamp, Recess, Rule, StatusRow } from './src/ui';
 const STORE_KEY = 'loggdin.pairing';
 /** The computer waits 110 s while phone approvals are on; after that a request is dead. */
 const REQUEST_LIFETIME_MS = 110_000;
+/** A finished agent waits up to 30 minutes for a reply; the computer clears it sooner when done. */
+const REPLY_LIFETIME_MS = 30 * 60_000;
+const lifetime = (r: PhoneRequest) => (r.kind === 'reply' ? (r.waitMs ?? REPLY_LIFETIME_MS) : REQUEST_LIFETIME_MS);
 
 type HistoryItem = { key: string; allowed: boolean; label: string; command: string; at: number };
 type AgentNotice = { key: string; title: string; message: string; at: number };
@@ -53,6 +57,21 @@ export default function App() {
     await saveItem(STORE_KEY, JSON.stringify(p));
     setPairing(p);
   }, []);
+
+  // Native: a pairing link (com.loggdin.app://pair#loggdin-…, e.g. sent by AirDrop or opened from
+  // `loggdin phone setup`) pairs the app. Only while unpaired, so a link someone sends you can't
+  // quietly switch this phone to another computer.
+  useEffect(() => {
+    if (Platform.OS === 'web' || pairing !== null) return;
+    const fromLink = (url?: string | null) => {
+      const hash = url && url.includes('#') ? decodeURIComponent(url.slice(url.indexOf('#') + 1)) : '';
+      const p = parsePairing(hash);
+      if (p) pair(p);
+    };
+    Linking.getInitialURL().then(fromLink).catch(() => {});
+    const sub = Linking.addEventListener('url', ({ url }) => fromLink(url));
+    return () => sub.remove();
+  }, [pairing, pair]);
 
   const unpair = useCallback(async () => {
     await removeItem(STORE_KEY);
@@ -278,7 +297,7 @@ function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () 
   useEffect(() => {
     const timer = setInterval(() => {
       setRequests((list) => {
-        const live = list.filter((r) => Date.now() - r.at < REQUEST_LIFETIME_MS);
+        const live = list.filter((r) => Date.now() - r.at < lifetime(r));
         return live.length === list.length ? list : live;
       });
       setNow(Date.now());
@@ -317,8 +336,29 @@ function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () 
     );
   };
 
+  /** A reply typed for a finished agent (null = let it stop). */
+  const reply = async (request: PhoneRequest, text: string | null) => {
+    if (!request.replyId) return;
+    setSending(request.seq);
+    setError(null);
+    const ok = await sendText(pairing, request.replyId, text);
+    setSending(null);
+    if (!ok) {
+      setError('Your reply didn’t send. Check the connection and try again.');
+      return;
+    }
+    answered.current.add(request.seq);
+    setRequests((list) => list.filter((x) => x.seq !== request.seq));
+    setHistory((list) =>
+      [
+        { key: request.seq, allowed: text !== null, label: text === null ? 'Let it stop' : 'Replied', command: text ?? request.title, at: Date.now() },
+        ...list,
+      ].slice(0, 20),
+    );
+  };
+
   return (
-    <ScrollView contentContainerStyle={styles.column}>
+    <ScrollView contentContainerStyle={styles.column} keyboardShouldPersistTaps="handled">
       <View style={styles.topStrip}>
         <Wordmark />
         <View style={styles.link} accessible accessibilityLabel={online ? 'Connected' : 'Connecting'}>
@@ -357,7 +397,14 @@ function RequestsScreen({ pairing, onUnpair }: { pairing: Pairing; onUnpair: () 
         </View>
       ) : (
         requests.map((r) => (
-          <RequestPlate key={r.seq} request={r} now={now} busy={sending === r.seq} onAnswer={(i) => answer(r, i)} />
+          <RequestPlate
+            key={r.seq}
+            request={r}
+            now={now}
+            busy={sending === r.seq}
+            onAnswer={(i) => answer(r, i)}
+            onReply={(text) => reply(r, text)}
+          />
         ))
       )}
 
@@ -404,13 +451,16 @@ function RequestPlate({
   now,
   busy,
   onAnswer,
+  onReply,
 }: {
   request: PhoneRequest;
   now: number;
   busy: boolean;
   onAnswer: (index: number) => void;
+  onReply: (text: string | null) => void;
 }) {
   const t = useTheme();
+  const [draft, setDraft] = useState('');
   const [drop] = useState(() => new Animated.Value(0));
   const [lift] = useState(() => drop.interpolate({ inputRange: [0, 1], outputRange: [-16, 0] }));
 
@@ -435,11 +485,16 @@ function RequestPlate({
     };
   }, [drop]);
 
-  const left = Math.max(0, REQUEST_LIFETIME_MS - (now - request.at));
+  const left = Math.max(0, lifetime(request) - (now - request.at));
   const seconds = Math.ceil(left / 1000);
   const urgent = seconds <= 15;
-  const [command, ...rest] = request.message.split('\n');
-  const agent = request.title.replace(/\s+(needs permission|asks).*$/i, '') || 'An agent';
+  const isReply = request.kind === 'reply';
+  // A reply's message is the agent's whole last message; only its final line is the folder.
+  const lines = request.message.split('\n');
+  const [command, ...rest] = isReply
+    ? [lines.slice(0, -1).join('\n') || lines[0], lines[lines.length - 1]]
+    : lines;
+  const agent = request.title.replace(/\s+(needs permission|asks|finished).*$/i, '') || 'An agent';
   const isQuestion = request.kind === 'question';
   const rawFolder = (rest[0] ?? '').replace(/^Folder:\s*/i, '').trim();
   const hint = rest.slice(1).join(' ');
@@ -454,7 +509,7 @@ function RequestPlate({
       <Faceplate style={styles.plate}>
         <View style={styles.plateHead}>
           <Text accessibilityRole="header" style={[styles.title, { color: t.ink }]}>
-            {isQuestion ? `${agent} asks` : `${agent} asks to run`}
+            {isReply ? `${agent} finished` : isQuestion ? `${agent} asks` : `${agent} asks to run`}
           </Text>
           {request.high ? (
             <View style={[styles.risk, { backgroundColor: t.lampRed }]}>
@@ -463,7 +518,13 @@ function RequestPlate({
           ) : null}
         </View>
 
-        {isQuestion ? (
+        {isReply ? (
+          <Recess style={styles.commandWell}>
+            <Text style={[styles.replyMessage, { color: t.ink }]} selectable numberOfLines={14}>
+              {command}
+            </Text>
+          </Recess>
+        ) : isQuestion ? (
           <Text style={[styles.question, { color: t.ink }]}>{command}</Text>
         ) : (
           <Recess style={styles.commandWell}>
@@ -477,8 +538,11 @@ function RequestPlate({
           <Text style={[styles.metaText, { color: t.ink2 }]} numberOfLines={1}>
             {folder ? `In ${folder}` : ' '}
           </Text>
-          <Text style={[styles.metaText, styles.tabular, { color: urgent ? t.ink : t.ink2 }]}>{seconds} s left</Text>
+          <Text style={[styles.metaText, styles.tabular, { color: urgent ? t.ink : t.ink2 }]}>
+            {isReply ? `${Math.ceil(seconds / 60)} min left` : `${seconds} s left`}
+          </Text>
         </View>
+        {isReply ? null : (
         <View
           style={[styles.track, { backgroundColor: t.plateDeep }]}
           accessibilityRole="progressbar"
@@ -491,8 +555,37 @@ function RequestPlate({
             ]}
           />
         </View>
+        )}
 
         {hint ? <Text style={[styles.metaText, { color: t.ink2 }]}>{hint}</Text> : null}
+
+        {isReply ? (
+          <>
+            <Recess>
+              <TextInput
+                style={[styles.replyInput, { color: t.ink }]}
+                value={draft}
+                onChangeText={setDraft}
+                placeholder={`Tell ${agent} what to do next\u2026`}
+                placeholderTextColor={t.ink3}
+                selectionColor={t.signal}
+                cursorColor={t.signal}
+                multiline
+                maxLength={4000}
+                accessibilityLabel={`Reply to ${agent}`}
+              />
+            </Recess>
+            <View style={styles.keys}>
+              <Key
+                label="Send"
+                kind="signal"
+                disabled={busy || !draft.trim()}
+                onPress={() => onReply(draft.trim())}
+              />
+              <Key label="Let it stop" kind="plate" disabled={busy} onPress={() => onReply(null)} />
+            </View>
+          </>
+        ) : null}
 
         <View style={styles.keys}>
           {request.actions.map((a, i) => (
@@ -550,6 +643,8 @@ const styles = StyleSheet.create({
   riskText: { fontFamily: font.legend, fontSize: 13, color: '#ffffff' },
   commandWell: { padding: 14 },
   question: { fontFamily: font.medium, fontSize: 17, lineHeight: 24 },
+  replyMessage: { fontFamily: font.body, fontSize: 15, lineHeight: 21 },
+  replyInput: { minHeight: 88, maxHeight: 200, padding: 10, fontFamily: font.body, fontSize: 16, textAlignVertical: 'top', outlineWidth: 0 },
   noticeCard: { padding: 2 * u, gap: 6 },
   noticeHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   dismiss: { fontFamily: font.medium, fontSize: 14, textDecorationLine: 'underline' },

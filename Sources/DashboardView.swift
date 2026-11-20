@@ -6,6 +6,7 @@ import AppKit
 struct DashboardView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case overview = "Overview"
+        case sessions = "Sessions"
         case integrations = "Agent Integrations"
         case audit = "Audit Log"
         case rules = "Rules & Grants"
@@ -15,6 +16,7 @@ struct DashboardView: View {
         var icon: String {
             switch self {
             case .overview: return "shield.lefthalf.filled"
+            case .sessions: return "waveform.path.ecg"
             case .integrations: return "sparkles.rectangle.stack.fill"
             case .audit: return "clock.arrow.circlepath"
             case .rules: return "slider.horizontal.3"
@@ -355,6 +357,8 @@ struct DashboardView: View {
                         switch selectedTab {
                         case .overview:
                             OverviewTab()
+                        case .sessions:
+                            ScrollView { SessionsSection().padding(28).frame(maxWidth: .infinity, alignment: .leading) }
                         case .integrations:
                             AgentIntegrationsTab()
                         case .audit:

@@ -307,7 +307,7 @@ final class HookInstaller {
             ("PostToolUseFailure", 10),
             ("PermissionRequest", 120),
             ("Notification", 10),
-            ("Stop", 10),
+            ("Stop", 1800),   // long enough to wait for a reply from the card or the phone (loggdin answers at once when replies are off)
             ("SubagentStart", 10),
             ("SubagentStop", 10)
         ]

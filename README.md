@@ -46,7 +46,7 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 - **Allow Once (`Space` / Touch ID)**: Permits the single immediate action.
 - **Allow for 10 Min (`Tab` to toggle)**: Caches command approval for 10 minutes with auto-expiration, eliminating annoying repetitive prompts during active agent workflows.
 - **Allow 10 Min, All Folders ("10 min · all")**: An explicit opt-in for when you are working across several projects or tools at once. The approval covers every folder for 10 minutes. It is not offered for high-risk requests, and chained or unrelated commands still prompt. From the CLI: `loggdin allow 10m-all`.
-- **Always Allow**: Persists command rules to encrypted local storage (`~/.loggdin/rules.json`).
+- **Always Allow**: Saves a rule in `rules.json` in loggdin's state folder (plain JSON, readable only by your user account). Interpreters and downloaders (`python`, `node`, `curl`, `docker`, …) are only ever remembered as the exact command, never as the whole tool.
 - **Safety Boundary**: Catastrophic root commands (`rm -rf /`, `mkfs`) always require explicit verification and cannot be blindly whitelisted.
 
 ### 🔄 3. Simultaneous Multi-Agent Focus Preservation
@@ -63,6 +63,22 @@ Engineered for high-assurance developer environments, loggdin implements a dual-
 - **Windows / Linux:** `loggdin phone setup` prints a pairing code and link for loggdin Pocket; then `loggdin phone test`.
 - **Security:** outbound only: your computer publishes to a secret, random topic and listens on a matching reply topic, so no port is opened to the internet. Requests and their answer buttons are **encrypted end to end** with the pairing key, which only the QR code or pairing code carries, so the relay and anyone who learns the topic see only ciphertext. Only a phone holding the pairing key can register for notifications. Every answer carries a one-time HMAC-SHA256 signature tied to that single request, so a forged or replayed answer is ignored. "Always allow" and "all folders" are never offered on the phone, and high-risk requests get only Allow once / Deny. Commands flagged as containing a secret are never sent. Choose *Hide commands on the phone* (`loggdin phone details minimal`) to send only the agent, risk and folder. The audit log marks phone decisions with `"via": "phone"` (Mac: a Phone badge and a Via column in the CSV export).
 - **Relay:** messages pass through ntfy.sh by default, as ciphertext only. Lock-screen notifications from the installed app go through Expo's push service and carry only the agent, risk and folder. To use your own relay: `loggdin phone setup --server https://ntfy.example.com`, or edit `server` in `phone.json`. ntfy.sh allows about 250 messages a day per IP on the free tier.
+
+### 💬 6. Keep Agents Working From Your Phone
+- When Claude Code finishes a turn and you're away from the computer, loggdin shows its last message on the card and in **loggdin Pocket**, with a text box. What you type goes back to Claude Code as its next instruction, and it keeps working. **Let it stop** (or no answer in time) ends the turn as usual.
+- **When it asks:** *When I'm away* (default: screen locked or no input for a minute), *Always*, or *Off*. Mac: Dashboard → **Sessions**. Windows/Linux: `loggdin reply mode away|always|off`, or the buttons on the `loggdin ui` page. A finished agent waits up to 10 minutes for a reply (`loggdin reply wait <minutes>`, 1–30).
+- Answer from the computer too: the reply card on the Mac, the approval card on Windows/Linux, `loggdin ui`, or `loggdin reply "your text"`.
+- Replies typed on the phone are encrypted and signed with the pairing key, so the relay can't read them and nobody without the key can forge one. Each reply is bound to the one finished agent waiting for it.
+- Works with Claude Code today (its Stop hook can continue a session). Other agents show a "finished" notice.
+
+### 📋 7. Live Sessions and Per-Agent Pause
+- **Sessions** (Mac dashboard tab, menu bar, `loggdin ui`, `loggdin sessions`) lists every agent session with its folder and whether it is working, waiting for you, or finished.
+- **Pause one agent** for 10 minutes, an hour or until you resume (`loggdin pause codex 10m`, `loggdin resume codex`). While paused, its low and medium risk requests are allowed and logged (`"via": "paused"`). High-risk requests still ask.
+
+### 🧱 8. What loggdin protects against
+- loggdin is a seat belt for agents that make mistakes or follow injected instructions: every risky action waits for you.
+- It runs as your user, like the agents it watches, so it is not a sandbox against a process that is determined to get around it. To make that harder: loggdin scores every command itself (the hook's risk level is only a floor), treats edits to its own files and to any agent's hook settings as high risk, and allows a high-risk request only once, whoever answers.
+- A project's `.loggdin.json` can only make loggdin stricter (`blockedCommands`, `requireTouchID`). `allowedCommands` is ignored, so a cloned repository can't approve commands for you.
 
 ---
 
@@ -125,6 +141,8 @@ Use `--no-agents` / `-NoAgents` to skip that step, and `--uninstall` / `-Uninsta
 | Start at login | Login item | Startup folder / XDG autostart |
 | State folder | `~/Library/Application Support/AgentSentinel` | `%APPDATA%\Loggdin` / `~/.config/loggdin` |
 | Rules, 10-min grants, audit chain | Yes | Yes |
+| Reply to a finished agent | Reply card, loggdin Pocket | Approval card, `loggdin ui`, `loggdin reply`, loggdin Pocket |
+| Sessions and per-agent pause | Dashboard → Sessions, menu bar | `loggdin ui`, `loggdin sessions`, `loggdin pause` |
 
 Set `LOGGDIN_HOME` to use a different state folder. Node.js is only needed for the MCP integration.
 
@@ -230,6 +248,9 @@ curl http://localhost:9191/audit/verify
 | `loggdin uninstall <agent\|all>` | Cleanly remove hooks and restore original configuration files. `all` also removes the zsh terminal gate, old loggdin MCP entries in `~/.claude.json`, and the PATH line loggdin added. |
 | `loggdin test <agent>` | Trigger a live demo permission prompt on your screen. |
 | `loggdin phone setup\|test\|on\|off\|status` | Pair loggdin Pocket and answer from your phone (end-to-end encrypted). `delay <s>` and `details <full\|minimal>` tune it. |
+| `loggdin reply <text>` | Answer a finished agent so it keeps working. `reply mode <away\|always\|off>`, `reply wait <minutes>`. |
+| `loggdin sessions` | Live agent sessions: folder, state, last activity, and paused agents. |
+| `loggdin pause <agent> [10m\|1h\|forever]` / `loggdin resume <agent>` | Pause one agent's prompts (high risk still asks). |
 
 ---
 

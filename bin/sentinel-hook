@@ -260,28 +260,60 @@ def extract_command(payload):
     cmd = payload.get('command') or payload.get('tool_name') or 'Execute Tool'
     return str(cmd)
 
+# Shells, interpreters and wrappers that run whatever text follows them.
+_SHELLS = ('sh', 'bash', 'zsh', 'dash', 'ksh', 'fish')
+_INLINE_CODE = re.compile(r'(?:^|[\s;&|(])(?:python[0-9.]*|node|deno|bun|perl|ruby|php|osascript)\s+(?:-[a-z]*[ce]\b|--eval\b)')
+_DESTRUCTIVE_CODE = ('rmtree', 'os.remove', 'os.unlink', 'unlink(', 'rimraf', 'fs.rm', 'rmsync', 'os.system',
+                     'subprocess', 'child_process', 'execsync', 'do shell script', 'file.delete', 'removedirs')
+
+
 def determine_risk(command, tool_name):
+    """high: can destroy data, escalate privileges or run code fetched from the network.
+    medium: changes repository state, installs packages or runs inline code.
+    Quotes are dropped first so `bash -c "rm -rf ~"` is judged by what it runs.
+    The loggdin app scores the command again and keeps the higher of the two."""
     cmd_lower = (command or '').lower()
     t_lower = (tool_name or '').lower()
-    tokens = cmd_lower.split()
+    flat = re.sub(r'[\'"`()]', ' ', cmd_lower)
+    tokens = re.split(r'[\s;&|]+', flat)
+    tokens = [t for t in tokens if t]
     first_token = tokens[0] if tokens else ''
 
-    # Dangerous destructive or privilege escalation operations
-    is_rm_rf = 'rm' in tokens and any(flag in tokens for flag in ['-rf', '-fr', '-r'])
-    is_sudo = first_token == 'sudo' or ' sudo ' in cmd_lower or '; sudo ' in cmd_lower or '&& sudo ' in cmd_lower or '| sudo ' in cmd_lower
-    is_dd = (first_token == 'dd' or ' dd if=' in cmd_lower) and ('of=/dev/' in cmd_lower or 'of=/dev/r' in cmd_lower or 'bs=' in cmd_lower)
-    is_disk_destructive = any(p in cmd_lower for p in ['mkfs', 'shutdown', '> /dev/sd', 'drop database', 'drop table', 'truncate table', 'chmod -r 777', 'chown -r'])
-    is_fork_bomb = ':(){ :|:& };:' in cmd_lower
+    def short_flag_has(letter):
+        return any(t.startswith('-') and not t.startswith('--') and letter in t[1:] for t in tokens)
 
-    if is_rm_rf or is_sudo or is_dd or is_disk_destructive or is_fork_bomb:
+    is_rm_recursive = 'rm' in tokens and (short_flag_has('r') or '--recursive' in tokens)
+    is_find_delete = 'find' in tokens and ('-delete' in tokens or re.search(r'-exec(dir)?\s+rm\b', flat) is not None)
+    is_sudo = any(t in ('sudo', 'doas', 'su') for t in tokens)
+    is_dd = 'dd' in tokens and 'of=' in flat
+    is_disk_destructive = any(p in flat for p in ['mkfs', 'shutdown', 'reboot', '> /dev/sd', '>/dev/sd', 'diskutil erase',
+                                                    'diskutil partition', 'drop database', 'drop table', 'truncate table',
+                                                    'chmod -r 777', 'chmod 777 /', 'launchctl unload', 'csrutil'])
+    is_recursive_owner = any(t in ('chmod', 'chown') for t in tokens) and (short_flag_has('r') or '--recursive' in tokens)
+    is_fork_bomb = ':(){ :|:& };:' in cmd_lower
+    # Code from the network straight into a shell or interpreter: curl … | sh, wget -O- … | python
+    is_pipe_to_shell = re.search(r'\|\s*(?:sudo\s+)?(?:env\s+)?(?:' + '|'.join(_SHELLS) +
+                                 r'|python[0-9.]*|node|perl|ruby)\b', cmd_lower) is not None
+    is_history_rewrite = ('git' in tokens and 'push' in tokens and
+                          ('--force' in tokens or '-f' in tokens or any(t.startswith('--force') for t in tokens)))
+    is_git_discard = ('git' in tokens and (('reset' in tokens and '--hard' in tokens) or
+                                           ('clean' in tokens and short_flag_has('f'))))
+    has_inline_code = _INLINE_CODE.search(cmd_lower) is not None
+    is_destructive_code = has_inline_code and any(k in cmd_lower for k in _DESTRUCTIVE_CODE)
+
+    if (is_rm_recursive or is_find_delete or is_sudo or is_dd or is_disk_destructive or is_recursive_owner or
+            is_fork_bomb or is_pipe_to_shell or is_history_rewrite or is_git_discard or is_destructive_code):
         return 'high'
 
-    # Medium risk: operations that modify repository state or install packages
-    is_pkg_install = any(cmd in cmd_lower for cmd in ['npm install', 'npm i ', 'pip install', 'brew install', 'gem install', 'cargo install'])
-    is_git_mod = 'git push' in cmd_lower or 'git reset' in cmd_lower or 'git commit' in cmd_lower or 'git branch -d' in cmd_lower
+    # Medium risk: operations that modify repository state, install packages or run inline code
+    is_pkg_install = any(c in cmd_lower for c in ['npm install', 'npm i ', 'pip install', 'pip3 install', 'brew install',
+                                                  'gem install', 'cargo install', 'yarn add', 'pnpm add', 'uv pip install'])
+    is_git_mod = any(c in cmd_lower for c in ['git push', 'git reset', 'git commit', 'git branch -d', 'git rebase',
+                                              'git checkout --', 'git restore', 'git stash drop'])
+    is_shell_wrapper = first_token in _SHELLS and '-c' in tokens or first_token in ('eval', 'exec', 'xargs')
     is_file_mod = t_lower in ['write_to_file', 'replace_file_content', 'multi_replace_file_content']
 
-    if is_pkg_install or is_git_mod or is_file_mod:
+    if is_pkg_install or is_git_mod or is_file_mod or has_inline_code or is_shell_wrapper:
         return 'medium'
 
     return 'low'
@@ -378,6 +410,13 @@ def calculate_blast_radius(payload, tool_name, command):
     return "Workspace"
 
 SENSITIVE_TARGETS = ['/.ssh', '/.aws', '/.gnupg', '/etc/', '/private/etc', '/var/root', '/Library/Keychains']
+# Files that switch loggdin off or change what it allows. An agent editing these could approve its
+# own requests or remove the hook, so they always count as high risk.
+SELF_PROTECTED_TARGETS = ['/.loggdin/', '/.loggdin.json', '.loggdin.json', 'Application Support/AgentSentinel',
+                          'AppData/Roaming/Loggdin', '/.config/loggdin', '/.claude/settings', '/.claude.json',
+                          '/.codex/hooks.json', '/.codex/config.toml', '/.gemini/config/hooks.json', '/.gemini/settings.json',
+                          '/.cursor/mcp.json', '/.copilot/hooks', 'claude_desktop_config.json',
+                          '/.zshrc', '/.zprofile', '/.bashrc', '/.bash_profile', 'sentinel-hook', 'Loggdin.app']
 
 def check_workspace_jail(payload, modifies_files, command):
     warnings = []
@@ -387,6 +426,11 @@ def check_workspace_jail(payload, modifies_files, command):
     for s in SENSITIVE_TARGETS:
         if s in text_to_check:
             warnings.append(f"Jail Violation: Operation targets sensitive credential path ({s})")
+    expanded = text_to_check.replace('~/', os.path.expanduser('~') + '/').replace('\\', '/')
+    for s in SELF_PROTECTED_TARGETS:
+        if s in expanded:
+            warnings.append(f"Changes loggdin or an agent's hook settings ({s.strip('/')})")
+            break
 
     # Check for workspace containment if workspace root is known
     workspaces = payload.get('workspacePaths') or []
@@ -396,7 +440,9 @@ def check_workspace_jail(payload, modifies_files, command):
             lower_m = modifies_files.lower()
             if not any(k in lower_m for k in ['no (', 'workspace', 'terminal']):
                 expanded_mod = os.path.abspath(os.path.expanduser(modifies_files))
-                if not expanded_mod.startswith(ws_root) and not expanded_mod.startswith('/tmp') and not expanded_mod.startswith('/var/folders'):
+                inside = expanded_mod == ws_root or expanded_mod.startswith(ws_root.rstrip('/') + '/')
+                temp = any(expanded_mod == t or expanded_mod.startswith(t + '/') for t in ('/tmp', '/private/tmp', '/var/folders', '/private/var/folders'))
+                if not inside and not temp:
                     warnings.append(f"Jail Violation: File target escapes workspace root ({modifies_files})")
 
     return warnings
@@ -642,12 +688,68 @@ def _emit_allow(agent, event):
                'hookSpecificOutput': {'hookEventName': event or 'PermissionRequest', 'decision': {'behavior': 'allow'}}})
 
 
+# Agents whose Stop hook can continue the session: Claude Code reads {"decision": "block", "reason": …}
+# and keeps working with the reason as its next instruction.
+REPLY_AGENTS = {'claude-code'}
+REPLY_MAX_WAIT = 1800
+
+
+def _last_assistant_text(payload):
+    text = payload.get('last_assistant_message')
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    path = payload.get('transcript_path')
+    if not path or not os.path.isfile(os.path.expanduser(path)):
+        return ''
+    try:
+        with open(os.path.expanduser(path), 'rb') as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 400_000))
+            lines = f.read().decode('utf-8', 'replace').splitlines()
+    except OSError:
+        return ''
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get('type') != 'assistant':
+            continue
+        content = (entry.get('message') or {}).get('content')
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            parts = [c.get('text', '') for c in content if isinstance(c, dict) and c.get('type') == 'text']
+            joined = '\n'.join(p for p in parts if p).strip()
+            if joined:
+                return joined
+    return ''
+
+
+def handle_agent_stop(agent, payload):
+    """Ask loggdin whether you want to say anything before the agent stops. loggdin answers at once
+    with nothing unless replies are on and you're away (or set to always); then it waits for a reply
+    from loggdin Pocket or the card. A reply continues the session with that text."""
+    message = _last_assistant_text(payload)
+    if len(message) > 1500:
+        message = '…' + message[-1499:]
+    obj = {'kind': 'reply', 'agent': _agent_display(agent), 'directory': resolve_directory(payload),
+           'sessionId': payload.get('session_id', ''), 'message': message or 'Finished its turn.'}
+    resp = _send_kind(obj, '/reply', REPLY_MAX_WAIT)
+    text = (resp or {}).get('text')
+    if isinstance(text, str) and text.strip():
+        debug_log(f"REPLY: continuing with {len(text)} chars\n")
+        _emit({'decision': 'block', 'reason': text.strip()[:4000]})
+        sys.exit(0)
+
+
 def handle_agent_notification(agent, payload):
     ntype = payload.get('notification_type') or payload.get('type') or ''
     if ntype and ntype not in QUESTION_NOTIFICATION_TYPES:
         return
     message = payload.get('message') or 'Waiting for your input'
     _send_kind({'kind': 'notice', 'agent': _agent_display(agent), 'directory': resolve_directory(payload),
+                'sessionId': payload.get('session_id', ''),
                 'title': 'is waiting for you', 'message': str(message)[:600]}, '/notice', 3)
 
 
@@ -726,13 +828,20 @@ def main():
     # Auto-allow immediately so the native IDE/terminal input modal appears seamlessly with full keyboard focus.
     t_name = payload.get('tool_name') or payload.get('toolCall', {}).get('name') or ''
     t_name_lower = t_name.lower()
+    # Exact names only: a substring match let any tool with "question" in its name (an MCP tool
+    # like run_question_sql) through without a prompt.
     interactive_question_tools = {
-        'askuserquestion', 'ask_question', 'ask_user', 'question',
-        'prompt_user', 'confirm', 'user_input', 'input', 'interactive_prompt'
+        'askuserquestion', 'ask_question', 'ask_user', 'ask_followup_question', 'prompt_user', 'user_input',
+        'interactive_prompt'
     }
-    if t_name_lower in interactive_question_tools or 'question' in t_name_lower:
+    if t_name_lower in interactive_question_tools:
         handle_agent_question(agent, event, payload, is_ask_mode)
         sys.exit(0)
+
+    # The agent finished its turn: loggdin may hand back a reply typed on the phone or the card,
+    # and the agent keeps working with it. No reply (the default when you're at the computer) = stop.
+    if event == 'Stop' and agent in REPLY_AGENTS:
+        handle_agent_stop(agent, payload)
 
     # "Waiting for your input" alerts: show them in loggdin (notch notice, or loggdin Pocket when away).
     if event == 'Notification':
@@ -779,17 +888,19 @@ def main():
             if any(b.lower() in cmd_clean for b in blocked):
                 respond(agent, event, False, 'Action blocked by repository security policy (.loggdin.json)')
 
-            allowed_cmds = policy.get('allowedCommands') or []
-            if any(cmd_clean == a.lower() or cmd_clean.startswith(a.lower() + ' ') for a in allowed_cmds):
-                respond(agent, event, True)
+            # allowedCommands is ignored: the file lives in the project the agent works in, so a
+            # cloned repo (or the agent itself) could use it to approve anything. Policy files can only
+            # make loggdin stricter; approvals come from the loggdin app.
+            if policy.get('allowedCommands'):
+                debug_log("POLICY: ignoring allowedCommands in .loggdin.json (only blockedCommands / requireTouchID apply)\n")
 
             require_touch = policy.get('requireTouchID') or []
             if any(t.lower() in cmd_clean for t in require_touch):
                 risk = 'high'
 
-        # Check deduplication cache: if the exact same (tool, command) was approved recently, auto-allow!
-        if check_recent_dedup(t_name, command):
-            respond(agent, event, True)
+        # Dedup cache: the exact same low/medium-risk (tool, command) approved in the last 15 s.
+        # Checked again after the secret and jail checks below, which can raise the risk.
+        dedup_hit = risk != 'high' and check_recent_dedup(t_name, command)
 
         resolved_dir = resolve_directory(payload)
         modifies_files = extract_modifies_files(payload, t_name)
@@ -805,6 +916,9 @@ def main():
         if jail_warnings:
             secret_warnings.extend(jail_warnings)
             risk = 'high'
+
+        if dedup_hit and risk != 'high':
+            respond(agent, event, True)
 
         # Production Feature: Extract interactive diff/payload preview
         diff_preview = extract_diff_preview(payload, t_name)
@@ -825,6 +939,7 @@ def main():
             'blastRadius': blast_radius,
             'symbol': 'sparkles' if agent == 'antigravity' else ('terminal.fill' if 'Bash' in t_name else 'pencil.and.outline'),
             'tool': t_name,
+            'sessionId': payload.get('session_id', ''),
             'forcePrompt': False,
         }
         # Keep the request small: the full agent payload (e.g. a whole file for Write) is not
@@ -879,8 +994,9 @@ def main():
             'event': event,
             'agent': agent,
             'sessionId': payload.get('session_id', ''),
+            'directory': resolve_directory(payload),
             'tool': payload.get('tool_name', ''),
-            'command': extract_command(payload)
+            'command': extract_command(payload)[:300]
         }
         if send_via_socket(notify_data, socket_path, timeout=1) is None:
             send_via_http(notify_data, timeout=0.5, path='/event')

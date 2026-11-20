@@ -53,19 +53,27 @@ final class LocalIPCServer {
 
     private func isAuthorized(headers: [String: String], path: String, bodyString: String?) -> Bool {
         guard !authToken.isEmpty else { return true }
-        if let headerToken = headers["x-loggdin-token"] ?? headers["x-sentinel-token"], headerToken == authToken {
+        func same(_ a: String) -> Bool {
+            let x = Array(a.utf8), y = Array(authToken.utf8)
+            guard x.count == y.count else { return false }
+            var diff: UInt8 = 0
+            for i in x.indices { diff |= x[i] ^ y[i] }
+            return diff == 0
+        }
+        if let headerToken = headers["x-loggdin-token"] ?? headers["x-sentinel-token"], same(headerToken) {
             return true
         }
         if let authHeader = headers["authorization"], authHeader.hasPrefix("Bearer ") {
             let token = String(authHeader.dropFirst(7)).trimmingCharacters(in: .whitespaces)
-            if token == authToken { return true }
+            if same(token) { return true }
         }
-        if path.contains("token=\(authToken)") {
+        if let q = URLComponents(string: "http://localhost" + path)?.queryItems,
+           let t = q.first(where: { $0.name == "token" })?.value, same(t) {
             return true
         }
         if let body = bodyString, let data = body.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let bodyToken = json["token"] as? String, bodyToken == authToken {
+           let bodyToken = json["token"] as? String, same(bodyToken) {
             return true
         }
         return false
@@ -269,7 +277,8 @@ final class LocalIPCServer {
 
         // 3. HARDENED SECURITY: Token Authorization for State-Modifying Endpoints
         let requiresAuth = path.hasPrefix("/decision") || path.hasPrefix("/allow") || path.hasPrefix("/deny") ||
-                           path.hasPrefix("/sound") || path == "/ask" || path == "/hook"
+                           path.hasPrefix("/sound") || path == "/ask" || path == "/hook" ||
+                           path.hasPrefix("/pending") || path.hasPrefix("/audit")
         if requiresAuth && !isAuthorized(headers: headers, path: path, bodyString: bodyString) {
             sendHTTPResponse(connection: connection, status: "401 Unauthorized", json: "{\"error\":\"Unauthorized: Valid token required in X-Loggdin-Token or Authorization header\"}")
             return
@@ -554,6 +563,9 @@ final class LocalIPCServer {
            let kind = obj["kind"] as? String {
             if kind == "notice" {
                 Task { @MainActor in
+                    SessionTracker.shared.record(event: "Notification", agent: (obj["agent"] as? String) ?? "An agent",
+                                                 sessionId: obj["sessionId"] as? String, directory: obj["directory"] as? String,
+                                                 detail: obj["message"] as? String)
                     NoticeController.shared.show(agent: (obj["agent"] as? String) ?? "An agent",
                                                  title: (obj["title"] as? String) ?? "is waiting for you",
                                                  message: (obj["message"] as? String) ?? "",
@@ -562,6 +574,20 @@ final class LocalIPCServer {
                 let ok = "{\"ok\":true}\n"
                 _ = ok.withCString { Darwin.send(fd, $0, strlen($0), 0) }
                 Darwin.close(fd)
+                return
+            }
+            if kind == "reply" {
+                Task { @MainActor in
+                    let reply = AgentReply(json: obj)
+                    SessionTracker.shared.record(event: "Stop", agent: reply.agent, sessionId: reply.sessionId,
+                                                 directory: reply.directory, detail: "Finished")
+                    let text = await ReplyController.shared.ask(reply)
+                    let payload: [String: Any] = text.map { ["text": $0] } ?? [:]
+                    let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
+                    let line = body + Data("\n".utf8)
+                    line.withUnsafeBytes { ptr in _ = Darwin.send(fd, ptr.baseAddress, line.count, 0) }
+                    Darwin.close(fd)
+                }
                 return
             }
             if kind == "question" {
@@ -582,7 +608,10 @@ final class LocalIPCServer {
         // instead of queueing a popup and making the agent wait on the hook's socket timeout.
         if let data = bodyString.data(using: .utf8),
            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-           obj["event"] != nil, obj["risk"] == nil {
+           let event = obj["event"] as? String, obj["risk"] == nil {
+            SessionTracker.shared.record(event: event, agent: (obj["agent"] as? String) ?? "CLI",
+                                         sessionId: obj["sessionId"] as? String, directory: obj["directory"] as? String,
+                                         detail: (obj["tool"] as? String).flatMap { $0.isEmpty ? nil : $0 })
             let ok = "{\"ok\":true}\n"
             _ = ok.withCString { Darwin.send(fd, $0, strlen($0), 0) }
             Darwin.close(fd)
@@ -626,11 +655,18 @@ final class LocalIPCServer {
         let pill = PillCatalog.definition(for: agent)
 
         let riskStr = (json["risk"] as? String)?.lowercased()
-        let risk: Risk = {
+        let claimed: Risk = {
             if riskStr == "high" { return .high }
             if riskStr == "medium" { return .medium }
             return .low
         }()
+        // The sender's risk level is only a floor: the app scores the command and the target file again.
+        let target = (json["modifiesFiles"] as? String) ?? ""
+        var risk = RiskScorer.higher(claimed, RiskScorer.score(cmd))
+        if RiskScorer.touchesSelfProtected(target) { risk = .high }
+        SessionTracker.shared.record(event: "PermissionRequest", agent: agent, sessionId: json["sessionId"] as? String,
+                                     directory: (json["directory"] as? String) ?? (json["cwd"] as? String),
+                                     detail: "Asking: " + String(cmd.prefix(80)))
 
         let title = (json["title"] as? String) ?? "\(pill.name) Permission"
         let subtitle = (json["subtitle"] as? String) ?? "\(pill.name) • \(json["tool"] as? String ?? "Tool")"
