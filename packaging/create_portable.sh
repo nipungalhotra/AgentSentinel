@@ -19,13 +19,14 @@ cp "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/install.ps1" "$STAGE/"
 chmod 755 "$STAGE/install.sh" "$STAGE/loggdin.py" "$STAGE/sentinel-hook"
 # Double-click installer for Linux desktops (XFCE, KDE, Cinnamon and MATE ask "Launch anyway?" once).
 # It runs install.sh with sh, so it works even when the archive tool dropped the executable bit.
-# Desktop Entry escaping: \\ -> \ (string), then \" and \$ inside the quoted argument, %% -> %.
+# The Exec line has no backslash escapes on purpose: Thunar's launcher mangles \" and \$ inside quoted
+# arguments (tested on Kali / Xfce 4.20). Python (needed by loggdin anyway) finds the folder from %k.
 cat > "$STAGE/Install loggdin.desktop" <<'DESK'
 [Desktop Entry]
 Type=Application
 Name=Install loggdin
 Comment=Install loggdin for your user account (no admin password needed)
-Exec=sh -c "exec sh \\"\\${0%%/*}/install.sh\\" --desktop" %k
+Exec=python3 -c "import os, sys; d = os.path.dirname(os.path.abspath(sys.argv[1])); os.execvp('sh', ['sh', os.path.join(d, 'install.sh'), '--desktop'])" %k
 Icon=system-software-install
 Terminal=true
 DESK

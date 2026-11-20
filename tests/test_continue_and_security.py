@@ -126,7 +126,11 @@ class LinuxGapsTest(unittest.TestCase):
             readme = z.read(next(n for n in z.namelist() if n.endswith("/README.txt"))).decode()
         self.assertIn("Terminal=true", desk)
         # Runs install.sh with sh from the launcher's own folder, so a dropped executable bit doesn't matter.
-        self.assertIn('Exec=sh -c "exec sh \\\\"\\\\${0%%/*}/install.sh\\\\" --desktop" %k', desk)
+        exec_line = next(l for l in desk.splitlines() if l.startswith("Exec="))
+        self.assertNotIn("\\", exec_line)            # Thunar mangles backslash escapes in Exec
+        self.assertIn("install.sh", exec_line)
+        self.assertIn("--desktop", exec_line)
+        self.assertTrue(exec_line.endswith(" %k"))
         self.assertIn("sh install.sh", readme)
         self.assertNotIn("./install.sh", readme)
 
