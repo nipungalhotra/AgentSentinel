@@ -17,17 +17,32 @@ mkdir -p "$STAGE" "$DIST"
 cp "$PROJECT_ROOT/bin/loggdin.py" "$PROJECT_ROOT/bin/sentinel-hook" "$PROJECT_ROOT/bin/sentinel-mcp.js" "$STAGE/"
 cp "$SCRIPT_DIR/install.sh" "$SCRIPT_DIR/install.ps1" "$STAGE/"
 chmod 755 "$STAGE/install.sh" "$STAGE/loggdin.py" "$STAGE/sentinel-hook"
+# Double-click installer for Linux desktops (XFCE, KDE, Cinnamon and MATE ask "Launch anyway?" once).
+# It runs install.sh with sh, so it works even when the archive tool dropped the executable bit.
+# Desktop Entry escaping: \\ -> \ (string), then \" and \$ inside the quoted argument, %% -> %.
+cat > "$STAGE/Install loggdin.desktop" <<'DESK'
+[Desktop Entry]
+Type=Application
+Name=Install loggdin
+Comment=Install loggdin for your user account (no admin password needed)
+Exec=sh -c "exec sh \\"\\${0%%/*}/install.sh\\" --desktop" %k
+Icon=system-software-install
+Terminal=true
+DESK
+chmod 755 "$STAGE/Install loggdin.desktop"
 cat > "$STAGE/README.txt" <<TXT
 loggdin ${VERSION} — permission gate for AI coding agents (Windows & Linux)
 
 Requirements: Python 3.9+.  Optional: Node.js (MCP for Cursor / Claude Desktop),
 notify-send on Linux for desktop notifications.
 
-Linux:    ./install.sh
+Linux:    double-click "Install loggdin" (choose "Launch Anyway" if asked),
+          or in a terminal in this folder:  sh install.sh
 Windows:  powershell -ExecutionPolicy Bypass -File install.ps1
 
-Then approve agent requests with:  loggdin ui   (or loggdin allow / loggdin deny)
-Uninstall: ./install.sh --uninstall   |   install.ps1 -Uninstall
+Then open "loggdin" from your app menu, or run:  loggdin ui
+Phone:     "Turn on phone approvals" on the loggdin page, or:  loggdin phone setup
+Uninstall: sh install.sh --uninstall   |   install.ps1 -Uninstall
 TXT
 
 rm -f "$DIST/$NAME.zip"

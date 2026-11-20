@@ -194,7 +194,7 @@
           <div><dt>Runs on</dt><dd>macOS 14 or later (Apple silicon and Intel). Windows and Linux with Python 3.9+.</dd></div>
           <div><dt>Network</dt><dd>Local only: 127.0.0.1 and a private Unix socket, protected by a per-user token.</dd></div>
           <div><dt>Your data</dt><dd>Stays on your machine. Optional webhooks only send what you configure.</dd></div>
-          <div><dt>Audit log</dt><dd>Every decision recorded in a tamper-evident SHA-256 hash chain. Export as CSV or JSON.</dd></div>
+          <div><dt>Audit log</dt><dd>Every decision recorded and SHA-256 hash-chained. Export as CSV or JSON.</dd></div>
           <div><dt>Idle CPU</dt><dd>About 0.1%, measured on a MacBook with the app idle.</dd></div>
           <div><dt>If it's not running</dt><dd>Agents carry on by default so you're never locked out. Set <code>LOGGDIN_FAIL_CLOSED=1</code> to block instead.</dd></div>
         </dl>
@@ -249,7 +249,7 @@
           <div class="dl">
             <h3>Windows and Linux</h3>
             <p>A small background service with an approval page in your browser. Needs Python 3.9 or later.</p>
-            <a class="key" href="https://github.com/nipungalhotra/AgentSentinel#option-3-windows--linux-portable-daemon">Install instructions</a>
+            <a class="key" href="https://github.com/nipungalhotra/AgentSentinel#option-4-windows--linux-portable-daemon">Install instructions</a>
           </div>
           <div class="dl">
             <h3>From source</h3>

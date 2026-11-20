@@ -689,6 +689,7 @@ textarea{font:inherit;width:100%;border-radius:8px;border:1px solid var(--line);
 <h1>loggdin</h1><p class="sub">Permission requests from your AI agents. Keep this tab open, or run <code>loggdin ui</code> when notified.</p>
 <div id="list"><p class="empty">Loading…</p></div>
 <div id="sessions" class="card"></div>
+<div id="phone" class="card"></div>
 </main>
 <script nonce="__NONCE__">
 (function(){
@@ -798,6 +799,24 @@ textarea{font:inherit;width:100%;border-radius:8px;border:1px solid var(--line);
       b.onclick=function(){api('/settings',{replyMode:o[1]}).then(pollSessions);};m.appendChild(b);});
     sess.appendChild(m);
   }
+  var phone=document.getElementById('phone');
+  function renderPhone(j){
+    if(!phone)return;phone.textContent='';
+    var h=el('div','row');h.appendChild(el('span','agent','Phone'));phone.appendChild(h);
+    if(!j.enabled){
+      phone.appendChild(el('p','meta','Answer requests from your phone with loggdin Pocket. Requests are encrypted with your pairing code.'));
+      var on=el('button','primary','Turn on phone approvals');on.onclick=function(){api('/phone',{on:true}).then(renderPhone);};
+      phone.appendChild(on);return;}
+    phone.appendChild(el('p','meta','On your phone, open this link (send it to yourself, or type the code in loggdin Pocket):'));
+    phone.appendChild(el('pre','',j.link));
+    var r=el('div','row');r.appendChild(el('span','meta','Pairing code'));r.appendChild(el('code','',j.code));phone.appendChild(r);
+    var b=el('div','row'),cp=el('button','','Copy link');
+    cp.onclick=function(){if(navigator.clipboard)navigator.clipboard.writeText(j.link).then(function(){cp.textContent='Copied';});};
+    var off=el('button','deny','Turn off');off.onclick=function(){api('/phone',{on:false}).then(renderPhone);};
+    b.appendChild(cp);b.appendChild(off);phone.appendChild(b);
+    phone.appendChild(el('p','meta','Treat the code like a password. Unanswered requests go to your phone after '+j.pushAfter+' s.'));
+  }
+  if(tok)api('/phone').then(renderPhone).catch(function(){});
   function pollSessions(){if(tok)api('/sessions').then(renderSessions).catch(function(){});}
   pollSessions();setInterval(pollSessions,5000);
   function poll(){
@@ -1757,6 +1776,8 @@ class Daemon:
                 if u.path == "/sessions":
                     return self._send(200, {"sessions": daemon.sessions.visible(), "paused": daemon.sessions.pauses(),
                                             "settings": load_settings()})
+                if u.path == "/phone":
+                    return self._send(200, phone_state())
                 if u.path == "/audit/verify":
                     return self._send(200, daemon.store.verify())
                 if u.path == "/audit/export":
@@ -1784,6 +1805,8 @@ class Daemon:
                     return self._send(200, daemon.notice(body))
                 if u.path == "/reply":
                     return self._send(200, daemon.reply(body, self.connection))
+                if u.path == "/phone":
+                    return self._send(200, phone_state(bool(body.get("on"))))
                 if u.path == "/settings":
                     changes = {k: body[k] for k in ("replyMode", "replyWait") if k in body}
                     return self._send(200, save_settings(changes) if changes else load_settings())
@@ -2317,6 +2340,32 @@ def autostart_path():
     if IS_MAC:
         return home("Library", "LaunchAgents", "dev.loggdin.daemon.plist")
     return os.path.join(os.environ.get("XDG_CONFIG_HOME") or home(".config"), "autostart", "loggdin.desktop")
+
+
+def menu_entry_path():
+    """Linux app-menu entry, so loggdin can be opened without a terminal."""
+    data = os.environ.get("XDG_DATA_HOME") or home(".local", "share")
+    return os.path.join(data, "applications", "loggdin.desktop")
+
+
+def set_menu_entry(on):
+    path = menu_entry_path()
+    if IS_WINDOWS or IS_MAC:
+        return None
+    if not on:
+        if os.path.exists(path):
+            os.remove(path)
+        return path
+    script = os.path.join(install_dir(), "loggdin.py")
+    if not os.path.exists(script):
+        script = os.path.abspath(__file__)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("[Desktop Entry]\nType=Application\nName=loggdin\nGenericName=AI agent approvals\n"
+                "Comment=Approve or deny what your AI coding agents want to run\n"
+                f"Exec=\"{python_exe()}\" \"{script}\" ui\nIcon=security-high\nTerminal=false\n"
+                "Categories=Development;\nKeywords=AI;agent;Claude;Codex;permission;approve;\n")
+    return path
 
 
 def _legacy_win_startup_cmd():
@@ -3484,6 +3533,31 @@ def doctor():
     return 0 if ok else 1
 
 
+def phone_link(cfg):
+    """Pairing link for loggdin Pocket; everything after "#" stays on the phone."""
+    code = phone_pairing_code(cfg)
+    target = code if cfg["server"] == PHONE_DEFAULT_SERVER else f"{cfg['server']}/{code}"
+    return f"{PHONE_APP_URL}/#{target}"
+
+
+def phone_state(turn=None):
+    """Phone approvals for the web page: turn on (creating a pairing on first use) or off, then report.
+    The pairing code is returned only while approvals are on; callers must hold the token."""
+    cfg = load_phone()
+    if turn is True:
+        cfg = cfg or new_phone_config()
+        cfg["enabled"] = True
+        save_phone(cfg)
+    elif turn is False and cfg:
+        cfg["enabled"] = False
+        save_phone(cfg)
+    on = bool(cfg and cfg.get("enabled"))
+    out = {"enabled": on, "appUrl": PHONE_APP_URL}
+    if on:
+        out.update(code=phone_pairing_code(cfg), link=phone_link(cfg), pushAfter=int(cfg.get("pushAfter", 15)))
+    return out
+
+
 def cmd_phone(argv):
     sub = (argv[:1] or ["status"])[0]
     cfg = load_phone()
@@ -3723,6 +3797,12 @@ def main(argv=None):
         if cmd == "install":
             ensure_daemon()
         return 1 if failed else 0
+    if cmd == "menu":
+        on = (argv[:1] or ["on"])[0] != "off"
+        p = set_menu_entry(on)
+        if p:
+            print(f"✓ app menu entry {'added' if on else 'removed'} ({p})")
+        return 0
     if cmd == "autostart":
         on = (argv[:1] or ["on"])[0] != "off"
         p = set_autostart(on)
