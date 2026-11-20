@@ -9,6 +9,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -92,6 +93,42 @@ class LinuxGapsTest(unittest.TestCase):
         self.assertEqual(os.stat(log_path).st_mode & 0o777, 0o600)
         self.d.save_settings({"replyMode": "always"})
         self.assertEqual(os.stat(os.path.join(self.tmp, "settings.json")).st_mode & 0o777, 0o600)
+
+    @unittest.skipIf(os.name == "nt" or sys.platform == "darwin", "Linux app menu")
+    def test_app_menu_entry_added_and_removed(self):
+        old = os.environ.get("XDG_DATA_HOME")
+        os.environ["XDG_DATA_HOME"] = os.path.join(self.tmp, "share")
+        try:
+            path = self.d.set_menu_entry(True)
+            text = open(path, encoding="utf-8").read()
+            self.assertIn("Name=loggdin", text)
+            self.assertRegex(text, r'Exec=".+" ".+loggdin\.py" ui')
+            self.assertIn("Terminal=false", text)
+            self.d.set_menu_entry(False)
+            self.assertFalse(os.path.exists(path))
+        finally:
+            if old is None:
+                os.environ.pop("XDG_DATA_HOME", None)
+            else:
+                os.environ["XDG_DATA_HOME"] = old
+
+    def test_portable_zip_has_double_click_installer(self):
+        if shutil.which("bash") is None or os.name == "nt":
+            self.skipTest("needs bash")
+        out = subprocess.run(["bash", os.path.join(ROOT, "packaging", "create_portable.sh")],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        import zipfile
+        zpath = re.search(r"Portable package: (.+\.zip)", out.stdout).group(1)
+        with zipfile.ZipFile(zpath) as z:
+            name = next(n for n in z.namelist() if n.endswith("/Install loggdin.desktop"))
+            desk = z.read(name).decode()
+            readme = z.read(next(n for n in z.namelist() if n.endswith("/README.txt"))).decode()
+        self.assertIn("Terminal=true", desk)
+        # Runs install.sh with sh from the launcher's own folder, so a dropped executable bit doesn't matter.
+        self.assertIn('Exec=sh -c "exec sh \\\\"\\\\${0%%/*}/install.sh\\\\" --desktop" %k', desk)
+        self.assertIn("sh install.sh", readme)
+        self.assertNotIn("./install.sh", readme)
 
     def test_restart_command_exists_and_installers_use_it(self):
         src = open(DAEMON, encoding="utf-8").read()
@@ -303,6 +340,24 @@ class DaemonFlowTest(unittest.TestCase):
         else:
             self.fail("reply card still waiting after the agent disconnected")
         self.req("POST", "/settings", {"replyMode": "off"})
+
+    def test_phone_pairing_from_the_web_page(self):
+        # Linux/Windows desktop users can pair a phone without the terminal.
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/phone")
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(e.exception.code, 401)              # the pairing code never leaves without the token
+        code, on = self.req("POST", "/phone", {"on": True})
+        self.assertEqual(code, 200)
+        self.assertTrue(on["enabled"])
+        self.assertRegex(on["code"], r"^loggdin-[a-z0-9]{20}\.[0-9a-f]{16}$")
+        self.assertTrue(on["link"].endswith("/#" + on["code"]))
+        self.assertEqual(self.req("GET", "/phone")[1]["code"], on["code"])      # same pairing, not a new one
+        off = self.req("POST", "/phone", {"on": False})[1]
+        self.assertFalse(off["enabled"])
+        self.assertNotIn("code", off)
+        self.assertEqual(self.req("POST", "/phone", {"on": True})[1]["code"], on["code"])
+        self.req("POST", "/phone", {"on": False})
 
     def test_stop_hook_without_reply_lets_the_agent_stop(self):
         self.req("POST", "/settings", {"replyMode": "off"})

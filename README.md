@@ -121,10 +121,15 @@ daemon (`bin/loggdin.py`, Python 3.9+ standard library only) that serves the sam
 so the hooks, MCP server and SDKs work unchanged. You approve requests on a local web page,
 or from the CLI, and get a desktop notification when an agent asks.
 
-Download `loggdin-portable-v<version>.zip` from the release (or run `./packaging/create_portable.sh`), unzip it, then:
+Download `loggdin-portable-v<version>.zip` from the release (or run `./packaging/create_portable.sh`) and unzip it.
 
+**Linux desktop:** double-click **Install loggdin** in the unzipped folder (choose *Launch Anyway* if your file
+manager asks). A terminal window shows the progress, then loggdin opens and appears in your app menu as **loggdin**.
+GNOME Files doesn't run launchers from folders; use the terminal command there.
+
+**Linux terminal** (use `sh`, since desktop archive tools often drop the executable bit):
 ```bash
-./install.sh                                            # Linux
+sh install.sh                                           # Linux
 ```
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1    # Windows
@@ -224,7 +229,7 @@ When running multiple coding assistants simultaneously (e.g., Claude Code in iTe
 Before approving any file modification tool call, loggdin captures a localized file state snapshot. If an agent ruins your file, open the loggdin dashboard and click **Undo** to instantly restore the original file contents.
 
 ### 5. Centralized Compliance & Merkle Audit Trail
-All security decisions are permanently logged to `~/.loggdin/audit_log.json` and chained together using cryptographic SHA-256 hashes. You can mathematically verify whether any audit entry has been altered, deleted, or tampered with:
+All security decisions are permanently logged to `~/.loggdin/audit_log.json` and chained together using cryptographic SHA-256 hashes. Verification detects damaged or edited entries. The chain has no secret key yet, so someone with access to your account could rewrite the whole log; treat it as a record, not tamper-proof evidence:
 ```bash
 curl http://localhost:9191/audit/verify
 # {"isValid": true, "totalEntries": 42, "message": "Audit chain intact"}
