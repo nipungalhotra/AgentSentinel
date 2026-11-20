@@ -904,7 +904,7 @@ def phone_parse_reply(cfg, text):
 
 
 def phone_message(cfg, req):
-    agent = req.get("requestedBy") or "An agent"
+    agent = Sessions.name(req.get("requestedBy")) if req.get("requestedBy") else "An agent"   # "claude-code" -> "Claude Code"
     high = req.get("risk") == "high"
     title = f"{agent} needs permission" + (" · HIGH RISK" if high else "")
     folder = os.path.basename(str(req.get("directory") or "").rstrip("/\\")) or str(req.get("directory") or "~")
@@ -1291,8 +1291,9 @@ class Sessions:
     @staticmethod
     def name(agent):
         a = str(agent or "CLI").strip()
-        return {"claude-code": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "cursor": "Cursor",
-                "copilot": "GitHub Copilot", "cowork": "Claude Desktop"}.get(a.lower(), a[:60])
+        return {"claude-code": "Claude Code", "claude": "Claude Code", "codex": "Codex", "chatgpt": "ChatGPT",
+                "antigravity": "Antigravity", "cursor": "Cursor", "copilot": "GitHub Copilot",
+                "cowork": "Claude Desktop", "muse": "Muse"}.get(a.lower(), a[:60])
 
     def record(self, event, agent, session_id=None, directory=None, detail=None):
         agent = self.name(agent)
