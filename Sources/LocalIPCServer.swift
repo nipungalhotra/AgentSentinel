@@ -518,6 +518,8 @@ final class LocalIPCServer {
                     Darwin.close(clientFD)
                     continue
                 }
+                var noSigPipe: Int32 = 1
+                setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
 
                 // Read on this background thread (blocking recv must never run on the main actor),
                 // then hand the finished line to the main actor.
@@ -531,6 +533,31 @@ final class LocalIPCServer {
         thread.start()
         unixSocketThread = thread
         print("[Sentinel IPC] Unix socket listening on \(path)")
+    }
+
+    /// Watches a client that is waiting for an answer and calls `onHangup` once if it disconnects first.
+    /// Call `stop()` before writing the answer and closing the descriptor.
+    nonisolated static func watchHangup(_ fd: Int32, onHangup: @escaping @Sendable () -> Void) -> HangupWatch {
+        let watch = HangupWatch()
+        let thread = Thread {
+            var byte: UInt8 = 0
+            while !watch.isStopped {
+                var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let n = Darwin.poll(&p, 1, 500)
+                if watch.isStopped { return }
+                guard n > 0 else { continue }
+                let gone = p.revents & Int16(POLLHUP | POLLERR | POLLNVAL) != 0
+                    || Darwin.recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 0
+                if gone {
+                    if watch.claim() { onHangup() }
+                    return
+                }
+                Thread.sleep(forTimeInterval: 0.5)   // unexpected extra bytes: ignore them, don't spin
+            }
+        }
+        thread.name = "AgentSentinel.HangupWatch"
+        thread.start()
+        return watch
     }
 
     /// Reads one newline-terminated message (max 2 MB) from a connected client.
@@ -577,11 +604,17 @@ final class LocalIPCServer {
                 return
             }
             if kind == "reply" {
+                let reply = AgentReply(json: obj)
+                // The agent can stop waiting (its hook timed out or was killed): take the card off
+                // the Mac and the phone instead of leaving a reply box that reaches nobody.
+                let watch = LocalIPCServer.watchHangup(fd) { [id = reply.id] in
+                    Task { @MainActor in ReplyController.shared.cancel(id: id) }
+                }
                 Task { @MainActor in
-                    let reply = AgentReply(json: obj)
                     SessionTracker.shared.record(event: "Stop", agent: reply.agent, sessionId: reply.sessionId,
                                                  directory: reply.directory, detail: "Finished")
                     let text = await ReplyController.shared.ask(reply)
+                    watch.stop()
                     let payload: [String: Any] = text.map { ["text": $0] } ?? [:]
                     let body = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
                     let line = body + Data("\n".utf8)
@@ -591,9 +624,15 @@ final class LocalIPCServer {
                 return
             }
             if kind == "question" {
+                let question = AgentQuestion(json: obj)
+                let watch = LocalIPCServer.watchHangup(fd) { [id = question?.id] in
+                    guard let id else { return }
+                    Task { @MainActor in QuestionController.shared.cancel(id: id) }
+                }
                 Task { @MainActor in
                     var answers: [String: String]? = nil
-                    if let q = AgentQuestion(json: obj) { answers = await QuestionController.shared.ask(q) }
+                    if let q = question { answers = await QuestionController.shared.ask(q) }
+                    watch.stop()
                     let body = (try? JSONSerialization.data(withJSONObject: ["answers": answers ?? [:]])) ?? Data("{}".utf8)
                     let line = body + Data("\n".utf8)
                     line.withUnsafeBytes { ptr in _ = Darwin.send(fd, ptr.baseAddress, line.count, 0) }
@@ -701,5 +740,24 @@ final class LocalIPCServer {
         case .timeout:
             return "{\"allowed\": false, \"decision\": \"timeout\"}"
         }
+    }
+}
+
+/// Stop flag shared between a waiting socket client's answer path and its hang-up watcher.
+final class HangupWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+
+    var isStopped: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+
+    /// The answer is ready: the watcher must not touch the descriptor again.
+    func stop() { lock.lock(); stopped = true; lock.unlock() }
+
+    /// True for the first caller only (the watcher reporting a hang-up before an answer).
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if stopped { return false }
+        stopped = true
+        return true
     }
 }

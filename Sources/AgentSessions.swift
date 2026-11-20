@@ -269,6 +269,15 @@ final class ReplyController {
 
     func isAsking(id: String) -> Bool { activeModel?.reply.id == id }
 
+    /// The agent stopped waiting (its hook timed out or was killed): drop its card on the Mac and the phone.
+    func cancel(id: String) {
+        if let model = activeModel, model.reply.id == id {
+            model.finish(nil)
+        } else if let i = queue.firstIndex(where: { $0.0.id == id }) {
+            queue.remove(at: i).1.resume(returning: nil)
+        }
+    }
+
     /// Text typed in loggdin Pocket, already opened and checked with the pairing key (nil = let it stop).
     @discardableResult
     func submitFromPhone(id: String, text: String?) -> Bool {

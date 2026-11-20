@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = appLaunchDate   // globals are lazy: pin the launch time now
+        // Writing an answer to an agent that already went away must not kill the app.
+        signal(SIGPIPE, SIG_IGN)
         // Enforce single instance: prevent duplicate processes & menu bar icons
         guard acquireSingleInstanceLock() else {
             print("[loggdin] Another instance is already running. Exiting.")

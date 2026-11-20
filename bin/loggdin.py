@@ -49,6 +49,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shutil
 import socket
 import subprocess
@@ -64,6 +65,25 @@ import urllib.request
 import urllib.error
 
 VERSION = "1.2.3"
+
+
+def client_gone(conn):
+    """True once the agent's hook has disconnected (timed out or killed) while we still wait for you."""
+    if conn is None:
+        return False
+    try:
+        ready, _, _ = select.select([conn], [], [], 0)
+        return bool(ready) and conn.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
+
+
+def wait_unless_gone(ev, timeout, conn):
+    """ev.wait(timeout), but stop early when the waiting agent goes away, so its card is withdrawn."""
+    end = time.time() + timeout
+    while not ev.wait(max(0.0, min(1.0, end - time.time()))):
+        if time.time() >= end or client_gone(conn):
+            return
 DEFAULT_PORT = 9191
 PORT_RANGE = 10                      # 9191..9200 if the default is taken
 ASK_TIMEOUT = float(os.environ.get("LOGGDIN_TIMEOUT", "115"))  # agents allow 120s
@@ -1406,7 +1426,7 @@ class Daemon:
         return decision_json(decision)
 
     # -- agent questions and "waiting for you" notices (same contract as the Mac app) --
-    def question(self, body):
+    def question(self, body, conn=None):
         """Show an agent's question; returns {"answers": {question: label}}, or {} to let the agent ask."""
         items = parse_questions(body)
         if not items:
@@ -1427,7 +1447,7 @@ class Daemon:
         log(f"QUESTION {agent}: {items[0]['question'][:120]}")
         notify(req)
         timer = self.phone.schedule(req)
-        ev.wait(timeout=timeout)
+        wait_unless_gone(ev, timeout, conn)
         self.pending.remove(req["id"])
         self.phone.finished(req["id"], timer)
         d = holder.get("decision") or {}
@@ -1472,7 +1492,7 @@ class Daemon:
         idle = user_idle_seconds()
         return idle is not None and idle >= AWAY_SECONDS
 
-    def reply(self, body):
+    def reply(self, body, conn=None):
         """An agent finished its turn. Returns {"text": …} to keep it working, or {} to let it stop.
         Answers at once unless replies are on (always, or "away" and you are away)."""
         agent = Sessions.name(body.get("agent") or "An agent")
@@ -1491,7 +1511,7 @@ class Daemon:
         notify(req)
         idle = user_idle_seconds()
         timer = self.phone.schedule(req, now=idle is not None and idle >= AWAY_SECONDS)
-        ev.wait(timeout=timeout)
+        wait_unless_gone(ev, timeout, conn)
         self.pending.remove(req["id"])
         self.phone.finished(req["id"], timer)
         d = holder.get("decision") or {}
@@ -1503,13 +1523,13 @@ class Daemon:
         log("  -> no reply; the agent stops")
         return {}
 
-    def dispatch(self, body):
+    def dispatch(self, body, conn=None):
         """One entry point for the socket and HTTP: permission request, question, notice or reply."""
         kind = body.get("kind") if isinstance(body, dict) else None
         if kind == "reply":
-            return self.reply(body)
+            return self.reply(body, conn)
         if kind == "question":
-            return self.question(body)
+            return self.question(body, conn)
         if kind == "notice":
             return self.notice(body)
         return self.ask(body if isinstance(body, dict) else {})
@@ -1556,7 +1576,7 @@ class Daemon:
                 if isinstance(body, dict) and body.get("event") and not body.get("risk") and not body.get("kind"):
                     resp = self.event(body)
                 else:
-                    resp = self.dispatch(body)
+                    resp = self.dispatch(body, conn)
                 conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
             except Exception:
                 pass
@@ -1698,11 +1718,11 @@ class Daemon:
                 if u.path in ("/ask", "/hook"):
                     return self._send(200, daemon.ask(body))
                 if u.path == "/question":
-                    return self._send(200, daemon.question(body))
+                    return self._send(200, daemon.question(body, self.connection))
                 if u.path == "/notice":
                     return self._send(200, daemon.notice(body))
                 if u.path == "/reply":
-                    return self._send(200, daemon.reply(body))
+                    return self._send(200, daemon.reply(body, self.connection))
                 if u.path == "/settings":
                     changes = {k: body[k] for k in ("replyMode", "replyWait") if k in body}
                     return self._send(200, save_settings(changes) if changes else load_settings())
