@@ -144,6 +144,13 @@ export function connect(p: Pairing, h: Handlers): () => void {
   let socket: WebSocket | null = null;
   let retry: ReturnType<typeof setTimeout> | null = null;
   let backoff = 1000;
+  // The relay sends a keepalive about every 45 s. A socket that goes quiet for longer (network
+  // change, laptop asleep, phone in the background) can still look open, so treat silence as a
+  // drop and reconnect instead of showing "Connected" while requests are missed.
+  let lastSeen = Date.now();
+  const watchdog = setInterval(() => {
+    if (!closed && socket && socket.readyState === WebSocket.OPEN && Date.now() - lastSeen > 100_000) socket.close();
+  }, 15_000);
 
   const open = () => {
     if (closed) return;
@@ -152,10 +159,12 @@ export function connect(p: Pairing, h: Handlers): () => void {
     const ws = new WebSocket(url);
     socket = ws;
     ws.onopen = () => {
+      lastSeen = Date.now();
       backoff = 1000;
       h.onStatus(true);
     };
     ws.onmessage = (event) => {
+      lastSeen = Date.now();
       let msg: any;
       try {
         msg = JSON.parse(String(event.data));
@@ -182,6 +191,7 @@ export function connect(p: Pairing, h: Handlers): () => void {
   open();
   return () => {
     closed = true;
+    clearInterval(watchdog);
     if (retry) clearTimeout(retry);
     socket?.close();
   };
