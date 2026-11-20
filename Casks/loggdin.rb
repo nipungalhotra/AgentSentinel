@@ -1,6 +1,6 @@
 cask "loggdin" do
-  version "1.2.2"
-  sha256 "dc371465750f6be6ab78b3aa859fb6c91fd50c4a1e936a6666a3d4dd1016a14d"
+  version "1.2.3"
+  sha256 "a44672a3aad68ff259886b7611d2dfe34b93f4d7690d59d9632d800cf67bb3dd"
 
   url "https://github.com/nipungalhotra/AgentSentinel/releases/download/v#{version}/loggdin-v#{version}.dmg"
   name "loggdin"
