@@ -73,7 +73,7 @@ if (-not (($userPath -split ';') -contains $ShimDir)) {
 }
 
 & $Python $Script autostart on
-& $Python $Script start
+& $Python $Script restart   # an upgrade runs the new code now, not after the next login
 if (-not $NoAgents) { & $Python $Script install detected }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {

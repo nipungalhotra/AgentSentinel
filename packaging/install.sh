@@ -63,7 +63,7 @@ chmod 755 "$SHIM"
 echo "✓ CLI installed: $SHIM"
 
 "$PYTHON" "$STATE_DIR/loggdin.py" autostart on
-"$PYTHON" "$STATE_DIR/loggdin.py" start
+"$PYTHON" "$STATE_DIR/loggdin.py" restart   # an upgrade runs the new code now, not after the next login
 
 if [ "$AGENTS" = 1 ]; then
   "$PYTHON" "$STATE_DIR/loggdin.py" install detected || true
