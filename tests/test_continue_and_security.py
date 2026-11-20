@@ -227,7 +227,27 @@ class DaemonFlowTest(unittest.TestCase):
         self.assertIn("Refactor done.", r["message"])
         self.req("POST", "/decision", {"requestId": r["id"], "text": "Now add tests"})
         th.join(20)
-        self.assertEqual(out["hook"], {"decision": "block", "reason": "Now add tests"})
+        self.assertEqual(out["hook"]["decision"], "block")
+        self.assertTrue(out["hook"]["reason"].startswith("The user replied from loggdin"))
+        self.assertTrue(out["hook"]["reason"].endswith(": Now add tests"))
+        self.req("POST", "/settings", {"replyMode": "off"})
+
+    def test_reply_card_is_withdrawn_when_the_agent_stops_waiting(self):
+        # A Claude Code session started before the hook timeout was raised kills the hook after 10 s.
+        # The reply card must go away then, not sit there taking a reply that reaches nobody.
+        self.req("POST", "/settings", {"replyMode": "always"})
+        body = json.dumps({"kind": "reply", "agent": "claude-code", "message": "Gone soon.", "directory": "~/ws"}).encode()
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        s.sendall(b"POST /reply HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                  + f"X-Loggdin-Token: {self.token}\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+        self.wait_pending("reply")
+        s.close()
+        for _ in range(60):
+            if not [r for r in self.req("GET", "/pending?all=1")[1].get("requests", []) if r.get("kind") == "reply"]:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("reply card still waiting after the agent disconnected")
         self.req("POST", "/settings", {"replyMode": "off"})
 
     def test_stop_hook_without_reply_lets_the_agent_stop(self):

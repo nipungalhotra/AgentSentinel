@@ -105,6 +105,15 @@ final class QuestionController {
 
     func isAsking(id: String) -> Bool { activeModel?.question.id == id }
 
+    /// The agent stopped waiting for the answer: drop its card on the Mac and the phone.
+    func cancel(id: String) {
+        if let model = activeModel, model.question.id == id {
+            model.finish(nil)
+        } else if let i = queue.firstIndex(where: { $0.0.id == id }) {
+            queue.remove(at: i).1.resume(returning: nil)
+        }
+    }
+
     /// An option tapped in loggdin Pocket (single-question requests only).
     @discardableResult
     func submitFromPhone(id: String, option: Int) -> Bool {

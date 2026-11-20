@@ -359,6 +359,7 @@ class CrossPlatformDaemonTest(unittest.TestCase):
             card.show(req)
             card.details = True
             card.render()
+            card.armed_at = time.time() + card.ARM_DELAY   # "just appeared", however long drawing took on a slow runner
             card.decide(False, keyboard=True)
             self.assertEqual(posted, [], "keys are ignored right after the card appears")
             card.armed_at = 0

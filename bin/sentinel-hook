@@ -692,6 +692,7 @@ def _emit_allow(agent, event):
 # and keeps working with the reason as its next instruction.
 REPLY_AGENTS = {'claude-code'}
 REPLY_MAX_WAIT = 1800
+REPLY_PREFIX = 'The user replied from loggdin (their phone or the reply card on their computer). Treat this as their next instruction: '
 
 
 def _last_assistant_text(payload):
@@ -739,7 +740,9 @@ def handle_agent_stop(agent, payload):
     text = (resp or {}).get('text')
     if isinstance(text, str) and text.strip():
         debug_log(f"REPLY: continuing with {len(text)} chars\n")
-        _emit({'decision': 'block', 'reason': text.strip()[:4000]})
+        # Claude Code shows the reason as "Stop hook feedback"; say plainly that it is the user's own
+        # instruction, or the agent may treat a short reply ("Input", "yes") as an automatic message.
+        _emit({'decision': 'block', 'reason': REPLY_PREFIX + text.strip()[:4000]})
         sys.exit(0)
 
 
